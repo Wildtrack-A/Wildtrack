@@ -10,6 +10,8 @@ class AnimalLogCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=250, description="Description of the animal")
     photo_uri: Optional[str] = Field(None, description="URI of the photo")
     journal_id: str = Field(..., description="ID of the journal this log belongs to")
+    latitude: Optional[float] = Field(None, description="GPS latitude coordinate")
+    longitude: Optional[float] = Field(None, description="GPS longitude coordinate")
 
 
 class AnimalLog(BaseModel):
@@ -18,6 +20,8 @@ class AnimalLog(BaseModel):
     species: str
     description: Optional[str] = None
     photo_uri: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     timestamp: datetime
     journal_id: str
     created_at: datetime
@@ -41,6 +45,7 @@ class Journal(BaseModel):
     """Schema for journal response."""
     id: str
     name: str
+    user_id: Optional[str] = None
     created_at: datetime
     logs: List[AnimalLog] = []
     

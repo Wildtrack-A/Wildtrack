@@ -7,10 +7,68 @@
  * - Make sure your phone and computer are on the same network
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 // For Expo Go on physical device, use your computer's IP address instead of localhost
 const API_BASE_URL = __DEV__ 
   ? 'http://169.233.183.248:8000/api/v1'  // Your computer's IP for Expo Go on physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
+
+// Token storage key
+const AUTH_TOKEN_KEY = '@wildtrack:auth_token';
+
+/**
+ * Get the Auth0 token from storage
+ * This will be set by your Auth0 integration
+ */
+export async function getAuthToken(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+  } catch (error) {
+    console.error('Error getting auth token:', error);
+    return null;
+  }
+}
+
+/**
+ * Set the Auth0 token in storage
+ * Call this after successful Auth0 login
+ */
+export async function setAuthToken(token: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch (error) {
+    console.error('Error setting auth token:', error);
+  }
+}
+
+/**
+ * Remove the Auth0 token from storage
+ * Call this on logout
+ */
+export async function removeAuthToken(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (error) {
+    console.error('Error removing auth token:', error);
+  }
+}
+
+/**
+ * Get headers with authentication token
+ */
+async function getAuthHeaders(): Promise<HeadersInit> {
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
+  
+  const token = await getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+}
 
 // Helper function to handle API responses
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -36,20 +94,22 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 // Journal API calls
 export const journalAPI = {
-  // Get all journals with their logs
+  // Get all journals with their logs (for authenticated user)
   async getAllJournals() {
-    const response = await fetch(`${API_BASE_URL}/journals`);
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/journals`, {
+      headers,
+    });
     return handleResponse(response);
   },
 
   // Create a new journal
   async createJournal(name: string) {
     console.log('Creating journal:', name, 'at', `${API_BASE_URL}/journals`);
+    const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/journals`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ name }),
     });
     console.log('Response status:', response.status, response.statusText);
@@ -58,11 +118,10 @@ export const journalAPI = {
 
   // Update a journal
   async updateJournal(journalId: string, name: string) {
+    const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/journals/${journalId}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ name }),
     });
     return handleResponse(response);
@@ -70,8 +129,10 @@ export const journalAPI = {
 
   // Delete a journal
   async deleteJournal(journalId: string) {
+    const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/journals/${journalId}`, {
       method: 'DELETE',
+      headers,
     });
     return handleResponse(response);
   },
@@ -84,17 +145,20 @@ export const logAPI = {
     species: string;
     description?: string;
     photo_uri?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
   }) {
+    const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/journals/${journalId}/logs`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         journal_id: journalId,
         species: logData.species,
         description: logData.description || null,
         photo_uri: logData.photo_uri || null,
+        latitude: logData.latitude || null,
+        longitude: logData.longitude || null,
       }),
     });
     return handleResponse(response);
@@ -106,11 +170,10 @@ export const logAPI = {
     description?: string;
     photo_uri?: string | null;
   }) {
+    const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/logs/${logId}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(logData),
     });
     return handleResponse(response);
@@ -118,8 +181,10 @@ export const logAPI = {
 
   // Delete a log
   async deleteLog(logId: string) {
+    const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/logs/${logId}`, {
       method: 'DELETE',
+      headers,
     });
     return handleResponse(response);
   },

@@ -10,6 +10,7 @@ from app.models.journal import (
     AnimalLogUpdate
 )
 from app.database import get_admin_supabase_client
+from app.auth import get_user_id_from_token
 from datetime import datetime
 
 router = APIRouter()
@@ -18,22 +19,28 @@ router = APIRouter()
 @router.get("/journals", response_model=List[Journal], status_code=status.HTTP_200_OK)
 async def get_journals(request: Request):
     """
-    Get all journals with their logs.
+    Get all journals with their logs for the authenticated user.
     
-    Returns a list of all journals, each containing its associated logs.
+    Returns a list of all journals belonging to the authenticated user, each containing its associated logs.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     supabase = get_admin_supabase_client()
     
     try:
-        # Get all journals
-        journals_response = supabase.table("journals").select("*").order("created_at", desc=True).execute()
+        # Get all journals for this user only
+        journals_response = supabase.table("journals").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
         
         if not journals_response.data:
             return []
         
-        # Get all logs
-        logs_response = supabase.table("logs").select("*").order("timestamp", desc=True).execute()
-        logs_data = logs_response.data if logs_response.data else []
+        # Get all logs for journals belonging to this user
+        journal_ids = [str(j["id"]) for j in journals_response.data] if journals_response.data else []
+        logs_data = []
+        if journal_ids:
+            logs_response = supabase.table("logs").select("*").in_("journal_id", journal_ids).order("timestamp", desc=True).execute()
+            logs_data = logs_response.data if logs_response.data else []
         
         # Group logs by journal_id
         journals_with_logs = []
@@ -45,6 +52,8 @@ async def get_journals(request: Request):
                     species=log["species"],
                     description=log.get("description"),
                     photo_uri=log.get("photo_uri"),
+                    latitude=log.get("latitude"),
+                    longitude=log.get("longitude"),
                     timestamp=datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00")),
                     journal_id=str(log["journal_id"]),
                     created_at=datetime.fromisoformat(log["created_at"].replace("Z", "+00:00"))
@@ -56,6 +65,7 @@ async def get_journals(request: Request):
             journal = Journal(
                 id=str(journal_data["id"]),
                 name=journal_data["name"],
+                user_id=journal_data.get("user_id"),
                 created_at=datetime.fromisoformat(journal_data["created_at"].replace("Z", "+00:00")),
                 logs=journal_logs
             )
@@ -73,10 +83,13 @@ async def get_journals(request: Request):
 @router.post("/journals", response_model=Journal, status_code=status.HTTP_201_CREATED)
 async def create_journal(request: Request, journal: JournalCreate):
     """
-    Create a new journal.
+    Create a new journal for the authenticated user.
     
-    Creates a new journal with the provided name.
+    Creates a new journal with the provided name, automatically associated with the authenticated user.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     try:
         supabase = get_admin_supabase_client()
     except Exception as e:
@@ -93,6 +106,7 @@ async def create_journal(request: Request, journal: JournalCreate):
         record = {
             "id": journal_id,
             "name": journal.name.strip(),
+            "user_id": user_id,
             "created_at": created_at
         }
         
@@ -112,6 +126,7 @@ async def create_journal(request: Request, journal: JournalCreate):
         return Journal(
             id=str(journal_data["id"]),
             name=journal_data["name"],
+            user_id=journal_data.get("user_id"),
             created_at=datetime.fromisoformat(journal_data["created_at"].replace("Z", "+00:00")),
             logs=[]
         )
@@ -133,11 +148,28 @@ async def update_journal(request: Request, journal_id: str, journal_update: Jour
     """
     Update a journal.
     
-    Updates the journal name.
+    Updates the journal name. Only the journal owner can update it.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     supabase = get_admin_supabase_client()
     
     try:
+        # Verify journal exists and belongs to user
+        journal_check = supabase.table("journals").select("id, user_id").eq("id", journal_id).execute()
+        if not journal_check.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Journal not found"
+            )
+        
+        if journal_check.data[0].get("user_id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to update this journal"
+            )
+        
         update_data = {}
         if journal_update.name is not None:
             update_data["name"] = journal_update.name.strip()
@@ -148,7 +180,7 @@ async def update_journal(request: Request, journal_id: str, journal_update: Jour
                 detail="No fields to update"
             )
         
-        response = supabase.table("journals").update(update_data).eq("id", journal_id).execute()
+        response = supabase.table("journals").update(update_data).eq("id", journal_id).eq("user_id", user_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -168,6 +200,8 @@ async def update_journal(request: Request, journal_id: str, journal_update: Jour
                 species=log["species"],
                 description=log.get("description"),
                 photo_uri=log.get("photo_uri"),
+                latitude=log.get("latitude"),
+                longitude=log.get("longitude"),
                 timestamp=datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00")),
                 journal_id=str(log["journal_id"]),
                 created_at=datetime.fromisoformat(log["created_at"].replace("Z", "+00:00"))
@@ -178,6 +212,7 @@ async def update_journal(request: Request, journal_id: str, journal_update: Jour
         return Journal(
             id=str(journal_data["id"]),
             name=journal_data["name"],
+            user_id=journal_data.get("user_id"),
             created_at=datetime.fromisoformat(journal_data["created_at"].replace("Z", "+00:00")),
             logs=journal_logs
         )
@@ -196,16 +231,33 @@ async def delete_journal(request: Request, journal_id: str):
     """
     Delete a journal and all its logs.
     
-    This will cascade delete all logs associated with the journal.
+    This will cascade delete all logs associated with the journal. Only the journal owner can delete it.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     supabase = get_admin_supabase_client()
     
     try:
+        # Verify journal exists and belongs to user
+        journal_check = supabase.table("journals").select("id, user_id").eq("id", journal_id).execute()
+        if not journal_check.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Journal not found"
+            )
+        
+        if journal_check.data[0].get("user_id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to delete this journal"
+            )
+        
         # Delete logs first (CASCADE should handle this, but being explicit)
         supabase.table("logs").delete().eq("journal_id", journal_id).execute()
         
         # Delete journal
-        response = supabase.table("journals").delete().eq("id", journal_id).execute()
+        response = supabase.table("journals").delete().eq("id", journal_id).eq("user_id", user_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -229,17 +281,26 @@ async def create_log(request: Request, journal_id: str, log: AnimalLogCreate):
     """
     Create a new log entry in a journal.
     
-    Creates a new animal log entry associated with the specified journal.
+    Creates a new animal log entry associated with the specified journal. Only the journal owner can add logs.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     supabase = get_admin_supabase_client()
     
     try:
-        # Verify journal exists
-        journal_check = supabase.table("journals").select("id").eq("id", journal_id).execute()
+        # Verify journal exists and belongs to user
+        journal_check = supabase.table("journals").select("id, user_id").eq("id", journal_id).execute()
         if not journal_check.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Journal not found"
+            )
+        
+        if journal_check.data[0].get("user_id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to add logs to this journal"
             )
         
         # Generate ID
@@ -253,6 +314,8 @@ async def create_log(request: Request, journal_id: str, log: AnimalLogCreate):
             "species": log.species.strip(),
             "description": log.description.strip() if log.description else None,
             "photo_uri": log.photo_uri,
+            "latitude": log.latitude,
+            "longitude": log.longitude,
             "timestamp": timestamp,
             "created_at": created_at
         }
@@ -271,6 +334,8 @@ async def create_log(request: Request, journal_id: str, log: AnimalLogCreate):
             species=log_data["species"],
             description=log_data.get("description"),
             photo_uri=log_data.get("photo_uri"),
+            latitude=log_data.get("latitude"),
+            longitude=log_data.get("longitude"),
             timestamp=datetime.fromisoformat(log_data["timestamp"].replace("Z", "+00:00")),
             journal_id=str(log_data["journal_id"]),
             created_at=datetime.fromisoformat(log_data["created_at"].replace("Z", "+00:00"))
@@ -290,11 +355,30 @@ async def update_log(request: Request, log_id: str, log_update: AnimalLogUpdate)
     """
     Update a log entry.
     
-    Updates the species, description, or photo_uri of a log entry.
+    Updates the species, description, or photo_uri of a log entry. Only the log owner can update it.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     supabase = get_admin_supabase_client()
     
     try:
+        # Verify log exists and belongs to user's journal
+        log_check = supabase.table("logs").select("id, journal_id").eq("id", log_id).execute()
+        if not log_check.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Log not found"
+            )
+        
+        journal_id = log_check.data[0].get("journal_id")
+        journal_check = supabase.table("journals").select("user_id").eq("id", journal_id).execute()
+        if not journal_check.data or journal_check.data[0].get("user_id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to update this log"
+            )
+        
         update_data = {}
         if log_update.species is not None:
             update_data["species"] = log_update.species.strip()
@@ -323,6 +407,8 @@ async def update_log(request: Request, log_id: str, log_update: AnimalLogUpdate)
             species=log_data["species"],
             description=log_data.get("description"),
             photo_uri=log_data.get("photo_uri"),
+            latitude=log_data.get("latitude"),
+            longitude=log_data.get("longitude"),
             timestamp=datetime.fromisoformat(log_data["timestamp"].replace("Z", "+00:00")),
             journal_id=str(log_data["journal_id"]),
             created_at=datetime.fromisoformat(log_data["created_at"].replace("Z", "+00:00"))
@@ -342,11 +428,30 @@ async def delete_log(request: Request, log_id: str):
     """
     Delete a log entry.
     
-    Permanently deletes the specified log entry.
+    Permanently deletes the specified log entry. Only the log owner can delete it.
     """
+    # Extract user ID from Auth0 token
+    user_id = get_user_id_from_token(request)
+    
     supabase = get_admin_supabase_client()
     
     try:
+        # Verify log exists and belongs to user's journal
+        log_check = supabase.table("logs").select("id, journal_id").eq("id", log_id).execute()
+        if not log_check.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Log not found"
+            )
+        
+        journal_id = log_check.data[0].get("journal_id")
+        journal_check = supabase.table("journals").select("user_id").eq("id", journal_id).execute()
+        if not journal_check.data or journal_check.data[0].get("user_id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to delete this log"
+            )
+        
         response = supabase.table("logs").delete().eq("id", log_id).execute()
         
         if not response.data:

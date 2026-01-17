@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+// TODO: Import Auth0 token storage when Auth0 is integrated
+// import { setAuthToken } from '../services/api';
 
 export default function Login() {
   const router = useRouter();
@@ -16,18 +18,37 @@ export default function Login() {
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  const handleLogin = () => {
-    // TODO: Implement login logic
+  const handleLogin = async () => {
+    // TODO: Implement Auth0 login logic here
+    // After successful Auth0 login, you should:
+    // 1. Get the Auth0 access token
+    // 2. Store it using: await setAuthToken(auth0Token);
+    // 3. Then navigate to home
+    
+    // Example (replace with actual Auth0 integration):
+    // const auth0Token = await auth0.login(loginUsername, loginPassword);
+    // await setAuthToken(auth0Token);
+    
     console.log('Login:', { username: loginUsername, password: loginPassword });
     router.push('/home');
   };
 
-  const handleSignup = () => {
-    // TODO: Implement signup logic
+  const handleSignup = async () => {
+    // TODO: Implement Auth0 signup logic here
+    // After successful Auth0 signup, you should:
+    // 1. Get the Auth0 access token
+    // 2. Store it using: await setAuthToken(auth0Token);
+    // 3. Then navigate to home
+    
     if (signupPassword !== confirmPassword) {
       alert('Passwords do not match');
       return;
     }
+    
+    // Example (replace with actual Auth0 integration):
+    // const auth0Token = await auth0.signup(signupUsername, signupPassword, { isFieldResearcher });
+    // await setAuthToken(auth0Token);
+    
     console.log('Signup:', { 
       username: signupUsername, 
       password: signupPassword,

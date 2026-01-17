@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import { journalAPI, logAPI } from '../services/api';
 
 interface AnimalLog {
@@ -25,6 +26,8 @@ interface AnimalLog {
   notes: string;
   description: string;
   photoUri: string | null;
+  latitude: number | null;
+  longitude: number | null;
   timestamp: Date;
   journalId: string;
 }
@@ -51,6 +54,8 @@ export default function Home() {
   const [species, setSpecies] = useState('');
   const [description, setDescription] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
   
   // Edit log state
   const [editSpecies, setEditSpecies] = useState('');
@@ -70,6 +75,8 @@ export default function Home() {
         notes: '',
         description: log.description || '',
         photoUri: log.photo_uri,
+        latitude: log.latitude || null,
+        longitude: log.longitude || null,
         timestamp: new Date(log.timestamp),
         journalId: log.journal_id,
       })),
@@ -95,6 +102,48 @@ export default function Home() {
   useEffect(() => {
     loadJournals();
   }, []);
+
+  const requestLocationPermission = async () => {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(
+        'Location Permission Needed',
+        'Location permission is required to record where you spotted the animal. This helps with wildlife tracking.',
+        [{ text: 'OK' }]
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const getCurrentLocation = async () => {
+    const hasPermission = await requestLocationPermission();
+    if (!hasPermission) return null;
+
+    setLocationLoading(true);
+    try {
+      // Use GPS only (no cellular required)
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced, // Good balance between accuracy and speed
+        mayShowUserSettingsDialog: true,
+      });
+      
+      setCurrentLocation({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+      return {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      };
+    } catch (error: any) {
+      console.error('Error getting location:', error);
+      Alert.alert('Location Error', 'Could not get your location. Log will be saved without location data.');
+      return null;
+    } finally {
+      setLocationLoading(false);
+    }
+  };
 
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -151,11 +200,19 @@ export default function Home() {
       return;
     }
 
+    // Use current location if available, otherwise try to get fresh location
+    let location = currentLocation;
+    if (!location) {
+      location = await getCurrentLocation();
+    }
+
     try {
       const backendLog = await logAPI.createLog(selectedJournalId, {
         species,
         description: description || undefined,
         photo_uri: photoUri,
+        latitude: location?.latitude,
+        longitude: location?.longitude,
       });
 
       // Convert backend log to frontend format
@@ -167,6 +224,8 @@ export default function Home() {
         notes: '',
         description: backendLog.description || '',
         photoUri: backendLog.photo_uri,
+        latitude: backendLog.latitude || null,
+        longitude: backendLog.longitude || null,
         timestamp: new Date(backendLog.timestamp),
         journalId: backendLog.journal_id,
       };
@@ -182,6 +241,7 @@ export default function Home() {
       setSpecies('');
       setDescription('');
       setPhotoUri(null);
+      setCurrentLocation(null);
       setShowLogModal(false);
       Alert.alert('Success', 'Log entry saved!');
     } catch (error: any) {
@@ -283,6 +343,8 @@ export default function Home() {
         notes: '',
         description: backendLog.description || '',
         photoUri: backendLog.photo_uri,
+        latitude: backendLog.latitude || null,
+        longitude: backendLog.longitude || null,
         timestamp: new Date(backendLog.timestamp),
         journalId: backendLog.journal_id,
       };
@@ -307,7 +369,7 @@ export default function Home() {
     }
   };
 
-  const openLogModal = () => {
+  const openLogModal = async () => {
     if (journals.length === 0) {
       Alert.alert(
         'No Journals',
@@ -323,6 +385,15 @@ export default function Home() {
       Alert.alert('No Journal Selected', 'Please select a journal first to add logs.');
       return;
     }
+    // Reset log form state when opening modal
+    setSpecies('');
+    setDescription('');
+    setPhotoUri(null);
+    setCurrentLocation(null);
+    
+    // Get location when opening modal
+    await getCurrentLocation();
+    
     setShowLogModal(true);
   };
 
@@ -408,6 +479,23 @@ export default function Home() {
                       <View style={styles.logPreviewInfo}>
                         <Text style={styles.logPreviewName}>{log.animalName}</Text>
                         <Text style={styles.logPreviewSpecies}>{log.species || 'Unknown species'}</Text>
+                        {/* Location and Timestamp */}
+                        <View style={styles.logPreviewMeta}>
+                          {log.latitude && log.longitude && (
+                            <View style={styles.logPreviewMetaItem}>
+                              <Ionicons name="location" size={12} color="#666" />
+                              <Text style={styles.logPreviewMetaText}>
+                                {log.latitude.toFixed(4)}, {log.longitude.toFixed(4)}
+                              </Text>
+                            </View>
+                          )}
+                          <View style={styles.logPreviewMetaItem}>
+                            <Ionicons name="time-outline" size={12} color="#666" />
+                            <Text style={styles.logPreviewMetaText}>
+                              {new Date(log.timestamp).toLocaleDateString()} {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </Text>
+                          </View>
+                        </View>
                       </View>
                       <TouchableOpacity
                         onPress={(e) => {
@@ -569,6 +657,39 @@ export default function Home() {
                   <Text style={styles.characterCount}>
                     {250 - description.length} characters remaining
                   </Text>
+
+                  {/* Location Display */}
+                  <View style={styles.locationDisplay}>
+                    <Ionicons name="location-outline" size={20} color="#007AFF" style={styles.locationIcon} />
+                    <View style={styles.locationInfo}>
+                      {locationLoading ? (
+                        <View style={styles.locationLoading}>
+                          <ActivityIndicator size="small" color="#007AFF" />
+                          <Text style={styles.locationText}>Getting location...</Text>
+                        </View>
+                      ) : currentLocation ? (
+                        <View>
+                          <Text style={styles.locationText}>
+                            {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
+                          </Text>
+                          <Text style={styles.locationLabel}>GPS Location</Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.locationTextUnavailable}>Location unavailable</Text>
+                      )}
+                    </View>
+                    <TouchableOpacity 
+                      onPress={getCurrentLocation}
+                      style={styles.refreshLocationButton}
+                      disabled={locationLoading}
+                    >
+                      <Ionicons 
+                        name="refresh" 
+                        size={20} 
+                        color={locationLoading ? "#999" : "#007AFF"} 
+                      />
+                    </TouchableOpacity>
+                  </View>
                 </ScrollView>
 
                 <TouchableOpacity style={styles.modalButton} onPress={saveLog}>
@@ -702,6 +823,42 @@ export default function Home() {
                       </Text>
                     )}
                   </View>
+
+                  {/* Location */}
+                  {selectedLog && (selectedLog.latitude || selectedLog.longitude) && (
+                    <View style={styles.logDetailSection}>
+                      <Text style={styles.logDetailLabel}>Location</Text>
+                      <View style={styles.logDetailValueContainer}>
+                        <View style={styles.locationDisplayRow}>
+                          <Ionicons name="location" size={20} color="#007AFF" />
+                          <Text style={styles.logDetailValue}>
+                            {selectedLog.latitude?.toFixed(6)}, {selectedLog.longitude?.toFixed(6)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Timestamp */}
+                  {selectedLog && (
+                    <View style={styles.logDetailSection}>
+                      <Text style={styles.logDetailLabel}>Date & Time</Text>
+                      <View style={styles.logDetailValueContainer}>
+                        <View style={styles.locationDisplayRow}>
+                          <Ionicons name="time-outline" size={20} color="#007AFF" />
+                          <Text style={styles.logDetailValue}>
+                            {new Date(selectedLog.timestamp).toLocaleString([], {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  )}
                 </ScrollView>
 
                 {isEditingLog && (
@@ -863,6 +1020,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginTop: 2,
+  },
+  logPreviewMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    gap: 12,
+  },
+  logPreviewMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  logPreviewMetaText: {
+    fontSize: 11,
+    color: '#666',
   },
   deleteLogButton: {
     padding: 8,
@@ -1039,6 +1211,49 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: -12,
     marginBottom: 16,
+  },
+  locationDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0F8FF',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  locationIcon: {
+    marginRight: 12,
+  },
+  locationInfo: {
+    flex: 1,
+  },
+  locationLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  locationText: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '500',
+  },
+  locationLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  locationTextUnavailable: {
+    fontSize: 14,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  refreshLocationButton: {
+    padding: 8,
+  },
+  locationDisplayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   modalButton: {
     backgroundColor: '#007AFF',
