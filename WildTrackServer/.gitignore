@@ -49,3 +49,8 @@ htmlcov/
 
 # Logs
 *.log
+
+# Node.js (if accidentally installed)
+node_modules/
+package.json
+package-lock.json
