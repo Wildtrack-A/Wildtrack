@@ -1,1 +1,0 @@
-# WildTrack Server Application

@@ -1,10 +1,11 @@
 """Ingestion API endpoint for receiving animal sightings."""
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, HTTPException, status, Request, Depends
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from app.models.observation import Observation, ObservationCreate
 from app.database import get_admin_supabase_client
+from app.auth import require_field_researcher
 
 router = APIRouter()
 
@@ -13,7 +14,11 @@ MAX_OBSERVATIONS_PER_REQUEST = 1000
 
 
 @router.post("/ingest", response_model=List[Observation], status_code=status.HTTP_201_CREATED)
-async def ingest_observations(request: Request, observations: List[ObservationCreate]):
+async def ingest_observations(
+    request: Request,
+    observations: List[ObservationCreate],
+    current_user: dict = Depends(require_field_researcher)
+):
     """
     Ingest a list of animal sightings into the database.
     
