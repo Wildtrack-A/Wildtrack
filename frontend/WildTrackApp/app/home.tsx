@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -10,10 +10,12 @@ import {
   Image,
   Alert,
   KeyboardAvoidingView,
-  Platform
+  Platform,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { journalAPI, logAPI } from '../services/api';
 
 interface AnimalLog {
   id: string;
@@ -36,6 +38,7 @@ interface Journal {
 
 export default function Home() {
   const [journals, setJournals] = useState<Journal[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showLogModal, setShowLogModal] = useState(false);
   const [showJournalModal, setShowJournalModal] = useState(false);
   const [showLogDetailModal, setShowLogDetailModal] = useState(false);
@@ -52,6 +55,46 @@ export default function Home() {
   // Edit log state
   const [editSpecies, setEditSpecies] = useState('');
   const [editDescription, setEditDescription] = useState('');
+
+  // Helper function to convert backend format to frontend format
+  const convertBackendToFrontend = (backendJournal: any): Journal => {
+    return {
+      id: backendJournal.id,
+      name: backendJournal.name,
+      createdAt: new Date(backendJournal.created_at),
+      logs: backendJournal.logs.map((log: any) => ({
+        id: log.id,
+        animalName: log.species, // Use species as animalName
+        species: log.species,
+        location: '',
+        notes: '',
+        description: log.description || '',
+        photoUri: log.photo_uri,
+        timestamp: new Date(log.timestamp),
+        journalId: log.journal_id,
+      })),
+    };
+  };
+
+  // Load journals from backend
+  const loadJournals = async () => {
+    try {
+      setLoading(true);
+      const backendJournals = await journalAPI.getAllJournals();
+      const convertedJournals = backendJournals.map(convertBackendToFrontend);
+      setJournals(convertedJournals);
+    } catch (error: any) {
+      Alert.alert('Error', `Failed to load journals: ${error.message}`);
+      console.error('Error loading journals:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load journals on mount
+  useEffect(() => {
+    loadJournals();
+  }, []);
 
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -78,26 +121,26 @@ export default function Home() {
     }
   };
 
-  const createJournal = () => {
+  const createJournal = async () => {
     if (!newJournalName.trim()) {
       Alert.alert('Error', 'Please enter a journal name');
       return;
     }
 
-    const newJournal: Journal = {
-      id: Date.now().toString(),
-      name: newJournalName,
-      logs: [],
-      createdAt: new Date(),
-    };
-
-    setJournals([...journals, newJournal]);
-    setNewJournalName('');
-    setShowJournalModal(false);
-    Alert.alert('Success', 'Journal created!');
+    try {
+      const backendJournal = await journalAPI.createJournal(newJournalName);
+      const convertedJournal = convertBackendToFrontend(backendJournal);
+      setJournals([...journals, convertedJournal]);
+      setNewJournalName('');
+      setShowJournalModal(false);
+      Alert.alert('Success', 'Journal created!');
+    } catch (error: any) {
+      Alert.alert('Error', `Failed to create journal: ${error.message}`);
+      console.error('Error creating journal:', error);
+    }
   };
 
-  const saveLog = () => {
+  const saveLog = async () => {
     if (!species.trim()) {
       Alert.alert('Error', 'Please enter a species name');
       return;
@@ -108,30 +151,43 @@ export default function Home() {
       return;
     }
 
-    const newLog: AnimalLog = {
-      id: Date.now().toString(),
-      animalName: species, // Using species as animal name for compatibility
-      species: species,
-      location: '',
-      notes: '',
-      description,
-      photoUri,
-      timestamp: new Date(),
-      journalId: selectedJournalId,
-    };
+    try {
+      const backendLog = await logAPI.createLog(selectedJournalId, {
+        species,
+        description: description || undefined,
+        photo_uri: photoUri,
+      });
 
-    setJournals(journals.map(journal => 
-      journal.id === selectedJournalId
-        ? { ...journal, logs: [...journal.logs, newLog] }
-        : journal
-    ));
+      // Convert backend log to frontend format
+      const newLog: AnimalLog = {
+        id: backendLog.id,
+        animalName: backendLog.species,
+        species: backendLog.species,
+        location: '',
+        notes: '',
+        description: backendLog.description || '',
+        photoUri: backendLog.photo_uri,
+        timestamp: new Date(backendLog.timestamp),
+        journalId: backendLog.journal_id,
+      };
 
-    // Reset form
-    setSpecies('');
-    setDescription('');
-    setPhotoUri(null);
-    setShowLogModal(false);
-    Alert.alert('Success', 'Log entry saved!');
+      // Update local state
+      setJournals(journals.map(journal => 
+        journal.id === selectedJournalId
+          ? { ...journal, logs: [...journal.logs, newLog] }
+          : journal
+      ));
+
+      // Reset form
+      setSpecies('');
+      setDescription('');
+      setPhotoUri(null);
+      setShowLogModal(false);
+      Alert.alert('Success', 'Log entry saved!');
+    } catch (error: any) {
+      Alert.alert('Error', `Failed to save log: ${error.message}`);
+      console.error('Error saving log:', error);
+    }
   };
 
   const deleteJournal = (journalId: string) => {
@@ -143,12 +199,18 @@ export default function Home() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            setJournals(journals.filter(j => j.id !== journalId));
-            if (selectedJournalId === journalId) {
-              setSelectedJournalId(null);
+          onPress: async () => {
+            try {
+              await journalAPI.deleteJournal(journalId);
+              setJournals(journals.filter(j => j.id !== journalId));
+              if (selectedJournalId === journalId) {
+                setSelectedJournalId(null);
+              }
+              Alert.alert('Success', 'Journal deleted');
+            } catch (error: any) {
+              Alert.alert('Error', `Failed to delete journal: ${error.message}`);
+              console.error('Error deleting journal:', error);
             }
-            Alert.alert('Success', 'Journal deleted');
           },
         },
       ]
@@ -164,13 +226,19 @@ export default function Home() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            setJournals(journals.map(journal => 
-              journal.id === journalId
-                ? { ...journal, logs: journal.logs.filter(log => log.id !== logId) }
-                : journal
-            ));
-            Alert.alert('Success', 'Log deleted');
+          onPress: async () => {
+            try {
+              await logAPI.deleteLog(logId);
+              setJournals(journals.map(journal => 
+                journal.id === journalId
+                  ? { ...journal, logs: journal.logs.filter(log => log.id !== logId) }
+                  : journal
+              ));
+              Alert.alert('Success', 'Log deleted');
+            } catch (error: any) {
+              Alert.alert('Error', `Failed to delete log: ${error.message}`);
+              console.error('Error deleting log:', error);
+            }
           },
         },
       ]
@@ -191,7 +259,7 @@ export default function Home() {
     setEditDescription('');
   };
 
-  const saveEditedLog = () => {
+  const saveEditedLog = async () => {
     if (!selectedLog) return;
 
     if (!editSpecies.trim()) {
@@ -199,27 +267,44 @@ export default function Home() {
       return;
     }
 
-    const updatedLog: AnimalLog = {
-      ...selectedLog,
-      species: editSpecies,
-      description: editDescription,
-      animalName: editSpecies, // Update animalName to match species
-    };
+    try {
+      const backendLog = await logAPI.updateLog(selectedLog.id, {
+        species: editSpecies,
+        description: editDescription || undefined,
+        photo_uri: selectedLog.photoUri,
+      });
 
-    setJournals(journals.map(journal => 
-      journal.id === selectedLog.journalId
-        ? { 
-            ...journal, 
-            logs: journal.logs.map(log => 
-              log.id === selectedLog.id ? updatedLog : log
-            )
-          }
-        : journal
-    ));
+      // Convert backend log to frontend format
+      const updatedLog: AnimalLog = {
+        id: backendLog.id,
+        animalName: backendLog.species,
+        species: backendLog.species,
+        location: '',
+        notes: '',
+        description: backendLog.description || '',
+        photoUri: backendLog.photo_uri,
+        timestamp: new Date(backendLog.timestamp),
+        journalId: backendLog.journal_id,
+      };
 
-    setSelectedLog(updatedLog);
-    setIsEditingLog(false);
-    Alert.alert('Success', 'Log updated!');
+      setJournals(journals.map(journal => 
+        journal.id === selectedLog.journalId
+          ? { 
+              ...journal, 
+              logs: journal.logs.map(log => 
+                log.id === selectedLog.id ? updatedLog : log
+              )
+            }
+          : journal
+      ));
+
+      setSelectedLog(updatedLog);
+      setIsEditingLog(false);
+      Alert.alert('Success', 'Log updated!');
+    } catch (error: any) {
+      Alert.alert('Error', `Failed to update log: ${error.message}`);
+      console.error('Error updating log:', error);
+    }
   };
 
   const openLogModal = () => {
@@ -242,6 +327,15 @@ export default function Home() {
   };
 
   const selectedJournal = journals.find(j => j.id === selectedJournalId);
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.loadingText}>Loading journals...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -639,6 +733,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
   },
   scrollView: {
     flex: 1,
