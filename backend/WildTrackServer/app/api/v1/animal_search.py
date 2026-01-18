@@ -4,6 +4,7 @@ from app.auth import get_current_user
 from app.config import settings
 import logging
 import httpx
+import json
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -12,18 +13,18 @@ router = APIRouter()
 
 # Gemini API configuration
 GEMINI_API_KEY = settings.gemini_api_key
-# Models to try (in order of preference):
-# gemini-2.5-flash-lite - requested model (likely best for free tier with higher quotas)
-# gemini-2.5-flash - standard flash model
-# gemini-2.0-flash-exp - experimental 2.0 model
-# gemini-1.5-flash-002 - stable flash model with free tier
-FREE_TIER_MODELS = [
-    "gemini-2.5-flash-lite", # Requested model (best for free tier - higher quotas)
-    "gemini-2.5-flash",      # Standard flash model
-    "gemini-2.0-flash-exp",  # Experimental 2.0 model
-    "gemini-1.5-flash-002",  # Stable flash model with free tier
+# Models to try (in order of preference) - Using Google AI Pro models:
+# gemini-2.0-flash-exp - Latest experimental 2.0 model (best performance)
+# gemini-1.5-pro - Pro model with advanced capabilities
+# gemini-1.5-flash - Fast pro model
+# gemini-2.5-flash - Latest stable flash model
+PRO_MODELS = [
+    "gemini-2.0-flash-exp",  # Latest experimental model (best for AI Pro)
+    "gemini-1.5-pro",        # Pro model with advanced reasoning
+    "gemini-1.5-flash",      # Fast pro model
+    "gemini-2.5-flash",      # Latest stable flash model
 ]
-GEMINI_MODEL = FREE_TIER_MODELS[0]  # Default to first model
+GEMINI_MODEL = PRO_MODELS[0]  # Default to first model
 
 
 @router.get("/search-animal")
@@ -32,9 +33,9 @@ async def search_animal(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Search for information about an animal using Google Gemini 2.5 Flash Lite.
+    Search for information about an animal using Google Gemini AI Pro models.
     
-    Returns detailed information and description about the requested animal.
+    Returns detailed structured information including icons, statistics, and graph data.
     """
     if not GEMINI_API_KEY:
         logger.error("Gemini API key not configured - check .env file for GEMINI_API_KEY")
@@ -44,19 +45,65 @@ async def search_animal(
         )
     
     try:
-        # Construct the prompt for Gemini
-        prompt = f"""Provide a comprehensive description and information about the animal: {animal_name}.
+        # Construct the enhanced prompt for Gemini Pro - requesting structured JSON response
+        prompt = f"""You are an expert zoologist and data visualization specialist. Provide comprehensive information about the animal: {animal_name}.
 
-Please include:
-1. Common name and scientific name (if applicable)
-2. Basic description (appearance, size, physical characteristics)
-3. Habitat and geographic distribution
-4. Diet and feeding habits
-5. Behavior and notable characteristics
-6. Conservation status (if applicable)
-7. Any other interesting facts
+Return your response as a JSON object with the following structure:
+{{
+  "common_name": "string",
+  "scientific_name": "string",
+  "icon_emoji": "string (best emoji representing this animal)",
+  "description": "string (2-3 paragraph comprehensive description)",
+  "physical_characteristics": {{
+    "size": "string (e.g., '1.2-1.8 meters')",
+    "weight": "string (e.g., '45-90 kg')",
+    "lifespan": "string (e.g., '15-20 years')",
+    "appearance": "string (detailed physical description)"
+  }},
+  "habitat": {{
+    "type": "string (e.g., 'Forest, Grassland')",
+    "geographic_distribution": "string (continents/regions)",
+    "habitat_data": {{
+      "forest": number (percentage 0-100),
+      "grassland": number,
+      "desert": number,
+      "aquatic": number,
+      "mountain": number,
+      "urban": number
+    }}
+  }},
+  "diet": {{
+    "type": "string (e.g., 'Carnivore, Herbivore, Omnivore')",
+    "primary_food": "string",
+    "diet_data": {{
+      "carnivore": number (percentage 0-100),
+      "herbivore": number,
+      "omnivore": number,
+      "insectivore": number,
+      "piscivore": number
+    }}
+  }},
+  "behavior": {{
+    "social_structure": "string",
+    "activity_pattern": "string (e.g., 'Nocturnal, Diurnal')",
+    "notable_behaviors": ["string", "string"]
+  }},
+  "conservation": {{
+    "status": "string (IUCN status)",
+    "population_trend": "string (e.g., 'Decreasing, Stable, Increasing')",
+    "estimated_population": "string (if known)",
+    "threats": ["string", "string"]
+  }},
+  "statistics": {{
+    "speed_kmh": number (top speed in km/h),
+    "height_cm": number (average height in cm),
+    "weight_kg": number (average weight in kg),
+    "lifespan_years": number (average lifespan)
+  }},
+  "interesting_facts": ["string", "string", "string"]
+}}
 
-Format the response in a clear, well-organized manner. Be specific and informative."""
+Be specific, accurate, and provide numerical data where possible. For habitat_data and diet_data, ensure percentages add up to approximately 100. Use realistic estimates based on scientific knowledge."""
 
         # Call Gemini API - try multiple free tier models and API versions
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -65,7 +112,7 @@ Format the response in a clear, well-organized manner. Be specific and informati
             successful_model = None  # Track which model worked
             
             # Try each model until one works
-            for model_name in FREE_TIER_MODELS:
+            for model_name in PRO_MODELS:
                 # Try v1beta first (most models available here), then v1
                 api_versions = ["v1beta", "v1"]
                 
@@ -83,10 +130,11 @@ Format the response in a clear, well-organized manner. Be specific and informati
                                     }]
                                 }],
                                 "generationConfig": {
-                                    "temperature": 0.7,
+                                    "temperature": 0.3,
                                     "topK": 40,
                                     "topP": 0.95,
-                                    "maxOutputTokens": 2048,
+                                    "maxOutputTokens": 4096,
+                                    "responseMimeType": "application/json"
                                 }
                             },
                             headers={
@@ -174,20 +222,53 @@ Format the response in a clear, well-organized manner. Be specific and informati
             
             data = response.json()
             
-            # Extract the text from Gemini's response
+            # Extract the JSON response from Gemini
             if "candidates" in data and len(data["candidates"]) > 0:
                 candidate = data["candidates"][0]
                 if "content" in candidate and "parts" in candidate["content"]:
                     parts = candidate["content"]["parts"]
                     if len(parts) > 0 and "text" in parts[0]:
-                        animal_info = parts[0]["text"]
+                        response_text = parts[0]["text"]
                         
-                        logger.info(f"Successfully retrieved information for animal: {animal_name} using model: {successful_model or GEMINI_MODEL}")
-                        return {
-                            "animal_name": animal_name,
-                            "information": animal_info,
-                            "source": f"Google Gemini ({successful_model or GEMINI_MODEL})"
-                        }
+                        # Try to parse as JSON
+                        try:
+                            # Clean the response text (remove markdown code blocks if present)
+                            cleaned_text = response_text.strip()
+                            if cleaned_text.startswith("```json"):
+                                cleaned_text = cleaned_text[7:]
+                            if cleaned_text.startswith("```"):
+                                cleaned_text = cleaned_text[3:]
+                            if cleaned_text.endswith("```"):
+                                cleaned_text = cleaned_text[:-3]
+                            cleaned_text = cleaned_text.strip()
+                            
+                            animal_data = json.loads(cleaned_text)
+                            
+                            logger.info(f"Successfully retrieved structured information for animal: {animal_name} using model: {successful_model or GEMINI_MODEL}")
+                            
+                            # Return structured data
+                            return {
+                                "animal_name": animal_data.get("common_name", animal_name),
+                                "scientific_name": animal_data.get("scientific_name", ""),
+                                "icon_emoji": animal_data.get("icon_emoji", "🐾"),
+                                "description": animal_data.get("description", ""),
+                                "physical_characteristics": animal_data.get("physical_characteristics", {}),
+                                "habitat": animal_data.get("habitat", {}),
+                                "diet": animal_data.get("diet", {}),
+                                "behavior": animal_data.get("behavior", {}),
+                                "conservation": animal_data.get("conservation", {}),
+                                "statistics": animal_data.get("statistics", {}),
+                                "interesting_facts": animal_data.get("interesting_facts", []),
+                                "source": f"Google Gemini AI Pro ({successful_model or GEMINI_MODEL})"
+                            }
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse JSON response, falling back to text: {e}")
+                            # Fallback to text format if JSON parsing fails
+                            return {
+                                "animal_name": animal_name,
+                                "information": response_text,
+                                "source": f"Google Gemini ({successful_model or GEMINI_MODEL})"
+                            }
             
             # If we get here, the response format was unexpected
             logger.warning(f"Unexpected response format from Gemini API: {data}")

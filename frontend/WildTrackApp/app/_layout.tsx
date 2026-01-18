@@ -1,10 +1,11 @@
 import { Stack } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Platform, StatusBar, TextInput, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Platform, StatusBar, TextInput, ActivityIndicator, KeyboardAvoidingView, Dimensions } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useState, useEffect } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { searchAnimal } from '../services/api';
+import { searchAnimal, AnimalSearchResult } from '../services/api';
+import { PieChart, BarChart } from 'react-native-chart-kit';
 
 function MenuContent({ onClose, onSearchClick }: { onClose: () => void; onSearchClick: () => void }) {
   const router = useRouter();
@@ -76,8 +77,34 @@ function MenuContent({ onClose, onSearchClick }: { onClose: () => void; onSearch
 function AnimalSearchModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const [animalName, setAnimalName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ animal_name: string; information: string; source: string } | null>(null);
+  const [result, setResult] = useState<AnimalSearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const screenWidth = Dimensions.get('window').width;
+
+  // Helper function to get habitat color
+  const getHabitatColor = (habitat: string): string => {
+    const colors: { [key: string]: string } = {
+      forest: '#228B22',
+      grassland: '#9ACD32',
+      desert: '#F4A460',
+      aquatic: '#1E90FF',
+      mountain: '#8B7355',
+      urban: '#808080',
+    };
+    return colors[habitat.toLowerCase()] || '#007AFF';
+  };
+
+  // Helper function to get diet color
+  const getDietColor = (diet: string): string => {
+    const colors: { [key: string]: string } = {
+      carnivore: '#DC143C',
+      herbivore: '#32CD32',
+      omnivore: '#FFA500',
+      insectivore: '#FFD700',
+      piscivore: '#00CED1',
+    };
+    return colors[diet.toLowerCase()] || '#007AFF';
+  };
 
   // Helper function to clean and format markdown text
   const formatText = (text: string): string => {
@@ -197,16 +224,262 @@ function AnimalSearchModal({ visible, onClose }: { visible: boolean; onClose: ()
                     showsVerticalScrollIndicator={true}
                     nestedScrollEnabled={true}
                   >
+                    {/* Header with Icon and Name */}
                     <View style={styles.searchResultHeader}>
                       <View style={styles.searchResultIconContainer}>
-                        <Ionicons name="paw" size={24} color="#007AFF" />
+                        {result.icon_emoji ? (
+                          <Text style={styles.emojiIcon}>{result.icon_emoji}</Text>
+                        ) : (
+                          <Ionicons name="paw" size={24} color="#007AFF" />
+                        )}
                       </View>
-                      <Text style={styles.searchResultTitle}>{result.animal_name}</Text>
+                      <View style={styles.titleContainer}>
+                        <Text style={styles.searchResultTitle}>{result.animal_name}</Text>
+                        {result.scientific_name && (
+                          <Text style={styles.scientificName}>{result.scientific_name}</Text>
+                        )}
+                      </View>
                     </View>
                     
                     <View style={styles.searchResultDivider} />
                     
-                    <Text style={styles.searchResultText}>{formatText(result.information)}</Text>
+                    {/* Description */}
+                    {result.description && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Description</Text>
+                        <Text style={styles.searchResultText}>{result.description}</Text>
+                      </View>
+                    )}
+                    
+                    {/* Fallback for old format */}
+                    {result.information && !result.description && (
+                      <Text style={styles.searchResultText}>{formatText(result.information)}</Text>
+                    )}
+                    
+                    {/* Physical Characteristics */}
+                    {result.physical_characteristics && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Physical Characteristics</Text>
+                        {result.physical_characteristics.size && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="resize-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Size: </Text>{result.physical_characteristics.size}</Text>
+                          </View>
+                        )}
+                        {result.physical_characteristics.weight && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="scale-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Weight: </Text>{result.physical_characteristics.weight}</Text>
+                          </View>
+                        )}
+                        {result.physical_characteristics.lifespan && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="time-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Lifespan: </Text>{result.physical_characteristics.lifespan}</Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
+                    
+                    {/* Statistics Bar Chart */}
+                    {result.statistics && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Statistics</Text>
+                        <View style={styles.chartContainer}>
+                          <BarChart
+                            data={{
+                              labels: ['Speed\n(km/h)', 'Height\n(cm)', 'Weight\n(kg)', 'Lifespan\n(years)'],
+                              datasets: [{
+                                data: [
+                                  result.statistics.speed_kmh || 0,
+                                  result.statistics.height_cm || 0,
+                                  result.statistics.weight_kg || 0,
+                                  result.statistics.lifespan_years || 0,
+                                ]
+                              }]
+                            }}
+                            width={screenWidth - 80}
+                            height={220}
+                            yAxisLabel=""
+                            yAxisSuffix=""
+                            chartConfig={{
+                              backgroundColor: '#ffffff',
+                              backgroundGradientFrom: '#ffffff',
+                              backgroundGradientTo: '#ffffff',
+                              decimalPlaces: 0,
+                              color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
+                              labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+                              style: {
+                                borderRadius: 16
+                              },
+                              barPercentage: 0.7,
+                            }}
+                            style={{
+                              marginVertical: 8,
+                              borderRadius: 16
+                            }}
+                            showValuesOnTopOfBars
+                            fromZero
+                          />
+                        </View>
+                      </View>
+                    )}
+                    
+                    {/* Habitat Distribution Pie Chart */}
+                    {result.habitat?.habitat_data && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Habitat Distribution</Text>
+                        {result.habitat.type && (
+                          <Text style={styles.subtitle}>{result.habitat.type}</Text>
+                        )}
+                        <View style={styles.chartContainer}>
+                          <PieChart
+                            data={Object.entries(result.habitat.habitat_data)
+                              .filter(([_, value]) => value && value > 0)
+                              .map(([key, value]) => ({
+                                name: key.charAt(0).toUpperCase() + key.slice(1),
+                                population: value || 0,
+                                color: getHabitatColor(key),
+                                legendFontColor: '#333',
+                                legendFontSize: 12
+                              }))}
+                            width={screenWidth - 80}
+                            height={220}
+                            chartConfig={{
+                              color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+                            }}
+                            accessor="population"
+                            backgroundColor="transparent"
+                            paddingLeft="15"
+                            absolute
+                          />
+                        </View>
+                      </View>
+                    )}
+                    
+                    {/* Diet Distribution Pie Chart */}
+                    {result.diet?.diet_data && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Diet Type</Text>
+                        {result.diet.type && (
+                          <Text style={styles.subtitle}>{result.diet.type}</Text>
+                        )}
+                        {result.diet.primary_food && (
+                          <Text style={styles.subtitle}>Primary: {result.diet.primary_food}</Text>
+                        )}
+                        <View style={styles.chartContainer}>
+                          <PieChart
+                            data={Object.entries(result.diet.diet_data)
+                              .filter(([_, value]) => value && value > 0)
+                              .map(([key, value]) => ({
+                                name: key.charAt(0).toUpperCase() + key.slice(1),
+                                population: value || 0,
+                                color: getDietColor(key),
+                                legendFontColor: '#333',
+                                legendFontSize: 12
+                              }))}
+                            width={screenWidth - 80}
+                            height={220}
+                            chartConfig={{
+                              color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+                            }}
+                            accessor="population"
+                            backgroundColor="transparent"
+                            paddingLeft="15"
+                            absolute
+                          />
+                        </View>
+                      </View>
+                    )}
+                    
+                    {/* Behavior */}
+                    {result.behavior && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Behavior</Text>
+                        {result.behavior.social_structure && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="people-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Social: </Text>{result.behavior.social_structure}</Text>
+                          </View>
+                        )}
+                        {result.behavior.activity_pattern && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="sunny-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Activity: </Text>{result.behavior.activity_pattern}</Text>
+                          </View>
+                        )}
+                        {result.behavior.notable_behaviors && result.behavior.notable_behaviors.length > 0 && (
+                          <View style={styles.behaviorsList}>
+                            {result.behavior.notable_behaviors.map((behavior, idx) => (
+                              <View key={idx} style={styles.behaviorItem}>
+                                <Ionicons name="star-outline" size={14} color="#007AFF" />
+                                <Text style={styles.behaviorText}>{behavior}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    )}
+                    
+                    {/* Conservation */}
+                    {result.conservation && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Conservation Status</Text>
+                        {result.conservation.status && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="shield-checkmark-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Status: </Text>{result.conservation.status}</Text>
+                          </View>
+                        )}
+                        {result.conservation.population_trend && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="trending-up-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Trend: </Text>{result.conservation.population_trend}</Text>
+                          </View>
+                        )}
+                        {result.conservation.estimated_population && (
+                          <View style={styles.infoRow}>
+                            <Ionicons name="stats-chart-outline" size={16} color="#666" />
+                            <Text style={styles.infoText}><Text style={styles.infoLabel}>Population: </Text>{result.conservation.estimated_population}</Text>
+                          </View>
+                        )}
+                        {result.conservation.threats && result.conservation.threats.length > 0 && (
+                          <View style={styles.threatsList}>
+                            <Text style={styles.threatsTitle}>Threats:</Text>
+                            {result.conservation.threats.map((threat, idx) => (
+                              <View key={idx} style={styles.threatItem}>
+                                <Ionicons name="warning-outline" size={14} color="#ff3b30" />
+                                <Text style={styles.threatText}>{threat}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    )}
+                    
+                    {/* Interesting Facts */}
+                    {result.interesting_facts && result.interesting_facts.length > 0 && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Interesting Facts</Text>
+                        {result.interesting_facts.map((fact, idx) => (
+                          <View key={idx} style={styles.factItem}>
+                            <Ionicons name="bulb-outline" size={16} color="#FFD700" />
+                            <Text style={styles.factText}>{fact}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    
+                    {/* Habitat Geographic Distribution */}
+                    {result.habitat?.geographic_distribution && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Geographic Distribution</Text>
+                        <View style={styles.infoRow}>
+                          <Ionicons name="globe-outline" size={16} color="#666" />
+                          <Text style={styles.infoText}>{result.habitat.geographic_distribution}</Text>
+                        </View>
+                      </View>
+                    )}
                     
                     <View style={styles.searchResultFooter}>
                       <Ionicons name="information-circle-outline" size={14} color="#999" />
@@ -615,5 +888,119 @@ const styles = StyleSheet.create({
     marginTop: 20,
     lineHeight: 24,
     fontWeight: '500',
+  },
+  emojiIcon: {
+    fontSize: 32,
+  },
+  titleContainer: {
+    flex: 1,
+  },
+  scientificName: {
+    fontSize: 14,
+    fontStyle: 'italic',
+    color: '#6c757d',
+    marginTop: 4,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#212529',
+    marginBottom: 12,
+    letterSpacing: -0.3,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6c757d',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  infoText: {
+    fontSize: 15,
+    color: '#495057',
+    marginLeft: 8,
+    flex: 1,
+    lineHeight: 22,
+  },
+  infoLabel: {
+    fontWeight: '600',
+    color: '#212529',
+  },
+  chartContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  behaviorsList: {
+    marginTop: 8,
+  },
+  behaviorItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+    paddingLeft: 4,
+  },
+  behaviorText: {
+    fontSize: 14,
+    color: '#495057',
+    marginLeft: 8,
+    flex: 1,
+    lineHeight: 20,
+  },
+  threatsList: {
+    marginTop: 12,
+    backgroundColor: '#fff3cd',
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ffc107',
+  },
+  threatsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#856404',
+    marginBottom: 8,
+  },
+  threatItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  threatText: {
+    fontSize: 14,
+    color: '#856404',
+    marginLeft: 8,
+    flex: 1,
+    lineHeight: 20,
+  },
+  factItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    backgroundColor: '#fff9e6',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FFD700',
+  },
+  factText: {
+    fontSize: 14,
+    color: '#495057',
+    marginLeft: 8,
+    flex: 1,
+    lineHeight: 20,
   },
 });

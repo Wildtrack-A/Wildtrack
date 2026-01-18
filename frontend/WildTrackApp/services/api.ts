@@ -305,14 +305,80 @@ export const logAPI = {
   },
 };
 
+// Animal Search API types
+export interface AnimalPhysicalCharacteristics {
+  size?: string;
+  weight?: string;
+  lifespan?: string;
+  appearance?: string;
+}
+
+export interface AnimalHabitat {
+  type?: string;
+  geographic_distribution?: string;
+  habitat_data?: {
+    forest?: number;
+    grassland?: number;
+    desert?: number;
+    aquatic?: number;
+    mountain?: number;
+    urban?: number;
+  };
+}
+
+export interface AnimalDiet {
+  type?: string;
+  primary_food?: string;
+  diet_data?: {
+    carnivore?: number;
+    herbivore?: number;
+    omnivore?: number;
+    insectivore?: number;
+    piscivore?: number;
+  };
+}
+
+export interface AnimalBehavior {
+  social_structure?: string;
+  activity_pattern?: string;
+  notable_behaviors?: string[];
+}
+
+export interface AnimalConservation {
+  status?: string;
+  population_trend?: string;
+  estimated_population?: string;
+  threats?: string[];
+}
+
+export interface AnimalStatistics {
+  speed_kmh?: number;
+  height_cm?: number;
+  weight_kg?: number;
+  lifespan_years?: number;
+}
+
+export interface AnimalSearchResult {
+  animal_name: string;
+  scientific_name?: string;
+  icon_emoji?: string;
+  description?: string;
+  physical_characteristics?: AnimalPhysicalCharacteristics;
+  habitat?: AnimalHabitat;
+  diet?: AnimalDiet;
+  behavior?: AnimalBehavior;
+  conservation?: AnimalConservation;
+  statistics?: AnimalStatistics;
+  interesting_facts?: string[];
+  source: string;
+  // Fallback for old format
+  information?: string;
+}
+
 // Animal Search API calls
 export const searchAPI = {
   // Search for animal information using Gemini
-  async searchAnimal(animalName: string): Promise<{
-    animal_name: string;
-    information: string;
-    source: string;
-  }> {
+  async searchAnimal(animalName: string): Promise<AnimalSearchResult> {
     const headers = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}/search-animal?animal_name=${encodeURIComponent(animalName)}`, {
       method: 'GET',
