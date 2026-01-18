@@ -304,7 +304,43 @@ export default function Home() {
       } finally {
         setDetectingAnimal(false);
       }
->>>>>>> origin/Final
+    }
+  };
+
+  const analyzeImageWithAI = async () => {
+    if (!photoUri) {
+      Alert.alert('Error', 'No image to analyze');
+      return;
+    }
+
+    setVerifyingImage(true);
+    try {
+      const verification = await imageVerificationAPI.verifyImage(photoUri);
+      setImageVerified(verification.is_real);
+      
+      if (verification.is_real) {
+        Alert.alert(
+          'Image Verified',
+          `Image is verified as real (confidence: ${(verification.confidence * 100).toFixed(1)}%)`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert(
+          'Image Not Verified',
+          `This image appears to be AI-generated or fake (confidence: ${(verification.confidence * 100).toFixed(1)}%). Please upload a real image.`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error: any) {
+      console.error('Error verifying image:', error);
+      Alert.alert(
+        'Verification Error',
+        'Could not verify image. Please try again.',
+        [{ text: 'OK' }]
+      );
+      setImageVerified(null);
+    } finally {
+      setVerifyingImage(false);
     }
   };
 
