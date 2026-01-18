@@ -364,3 +364,84 @@ export const redditSightingsAPI = {
     }
   },
 };
+
+// Zone Types
+export interface ZoneBoundaryPoint {
+  latitude: number;
+  longitude: number;
+}
+
+export interface ZonePoint {
+  latitude: number;
+  longitude: number;
+  timestamp?: string;
+}
+
+export interface Zone {
+  zone_id: number;
+  species: string;
+  boundary: ZoneBoundaryPoint[];
+  center?: { latitude: number; longitude: number };  // Only for researchers
+  individual_points?: ZonePoint[];  // Only for researchers
+  point_count?: number;  // Only for researchers
+}
+
+export interface ZonesResponse {
+  role: 'field_researcher' | 'public';
+  total_zones: number;
+  unique_species: string[];
+  zones: Record<string, Zone>;
+}
+
+// Zones API calls
+export const zonesAPI = {
+  // Get all zones (returns different data based on user role)
+  // Falls back to public test endpoint if not authenticated
+  async getAllZones(): Promise<ZonesResponse> {
+    const token = await getAuthToken();
+
+    if (token) {
+      // User is logged in - use authenticated endpoint
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE_URL}/zones/all`, {
+        headers,
+      });
+      return handleResponse<ZonesResponse>(response);
+    } else {
+      // Not logged in - use public test endpoint
+      console.log('No auth token, using public zones endpoint');
+      const response = await fetch(`${API_BASE_URL}/zones/all/test-public`, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      return handleResponse<ZonesResponse>(response);
+    }
+  },
+
+  // Get zones for a specific species
+  async getZonesBySpecies(speciesName: string) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/zones/species/${encodeURIComponent(speciesName)}`, {
+      headers,
+    });
+    return handleResponse(response);
+  },
+
+  // Get a specific zone by ID
+  async getZoneById(zoneId: number) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/zones/${zoneId}`, {
+      headers,
+    });
+    return handleResponse(response);
+  },
+
+  // Get zones summary
+  async getZonesSummary(speciesFilter?: string) {
+    const headers = await getAuthHeaders();
+    const params = speciesFilter ? `?species_filter=${encodeURIComponent(speciesFilter)}` : '';
+    const response = await fetch(`${API_BASE_URL}/zones/summary${params}`, {
+      headers,
+    });
+    return handleResponse(response);
+  },
+};
