@@ -1,11 +1,13 @@
 """Ingestion API endpoint for receiving animal sightings."""
 from typing import List
+from collections import Counter
 from fastapi import APIRouter, HTTPException, status, Request, Depends
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from app.models.observation import Observation, ObservationCreate
 from app.database import get_admin_supabase_client
 from app.auth import require_field_researcher
+from app.models.zone_retraining import check_and_trigger_retraining
 
 router = APIRouter()
 
@@ -80,7 +82,24 @@ async def ingest_observations(
         created_observations = [
             Observation(**item) for item in response.data
         ]
-        
+
+        # Check if retraining threshold is met and trigger if needed
+        # Count observations by species for per-species threshold tracking
+        try:
+            species_counts = Counter(obs.species for obs in observations if obs.species)
+            # Use the most common species for per-species threshold check
+            if species_counts:
+                most_common_species = species_counts.most_common(1)[0][0]
+                check_and_trigger_retraining(
+                    observation_count=len(observations),
+                    species=most_common_species
+                )
+            else:
+                check_and_trigger_retraining(observation_count=len(observations))
+        except Exception as e:
+            # Don't fail the ingestion if retraining check fails
+            print(f"Warning: Retraining check failed: {e}")
+
         return created_observations
         
     except HTTPException:
