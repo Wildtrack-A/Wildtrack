@@ -8,13 +8,13 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 sys.path.insert(0, PROJECT_ROOT)
 
 from app.models.dbscan_db import load_zones, get_zone_info, species_summary_dbscan, load_from_supabase
-from app.api.v1.auth import get_current_user
+from app.auth import get_current_active_user
 from app.database import get_supabase_client
 
 router = APIRouter()
 
 # Helper function to check if user is researcher
-async def is_researcher(current_user: dict = Depends(get_current_user)) -> bool:
+async def is_researcher(current_user: dict = Depends(get_current_active_user)) -> bool:
     """Check if current user has researcher role"""
     supabase = get_supabase_client()
     
@@ -24,11 +24,11 @@ async def is_researcher(current_user: dict = Depends(get_current_user)) -> bool:
     if not response.data:
         raise HTTPException(status_code=404, detail="User profile not found")
     
-    return response.data[0].get("role") == "field_researcher"  # Changed from "researcher"
+    return response.data[0].get("role") == "field_researcher"
 
 @router.get("/zones/all")
 async def get_all_zones(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_active_user)
 ):
     """
     Get all zones for all species.
@@ -37,7 +37,8 @@ async def get_all_zones(
     """
     try:
         # Load zones model
-        zones = load_zones('wildtrack_zones_dbscan.pkl')
+        zones = load_zones('app/models/wildtrack_zones_dbscan.pkl')
+
         
         # Check user role
         user_is_researcher = await is_researcher(current_user)
@@ -79,7 +80,7 @@ async def get_all_zones(
                 }
             
             return {
-                "role": "researcher",
+                "role": "field_researcher",
                 "total_zones": zones['n_zones'],
                 "unique_species": zones['unique_species'],
                 "zones": zones_with_points
@@ -101,7 +102,7 @@ async def get_all_zones(
                 }
             
             return {
-                "role": "citizen",
+                "role": "public",
                 "total_zones": zones['n_zones'],
                 "unique_species": zones['unique_species'],
                 "zones": zones_boundaries
@@ -112,7 +113,7 @@ async def get_all_zones(
 
 @router.get("/zones/summary")
 async def get_zones_summary(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_active_user),
     species_filter: Optional[str] = None
 ):
     """
@@ -122,7 +123,8 @@ async def get_zones_summary(
     """
     try:
         # Load zones model
-        zones = load_zones('wildtrack_zones_dbscan.pkl')
+        load_zones('app/models/wildtrack_zones_dbscan.pkl')
+
         
         # Load species list for summary
         _, species_list, _ = load_from_supabase(species_filter=species_filter)
@@ -136,7 +138,7 @@ async def get_zones_summary(
         if user_is_researcher:
             # Researchers get full data
             return {
-                "role": "researcher",
+                "role": "field_researcher",
                 "summary": summary,
                 "total_zones": zones['n_zones'],
                 "unique_species": zones['unique_species']
@@ -153,7 +155,7 @@ async def get_zones_summary(
                 }
             
             return {
-                "role": "citizen",
+                "role": "public",
                 "summary": citizen_summary,
                 "total_zones": zones['n_zones'],
                 "unique_species": zones['unique_species']
@@ -166,7 +168,7 @@ async def get_zones_summary(
 @router.get("/zones/{zone_id}")
 async def get_zone_details(
     zone_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_active_user)
 ):
     """
     Get details for a specific zone.
@@ -175,7 +177,8 @@ async def get_zone_details(
     """
     try:
         # Load zones model
-        zones = load_zones('wildtrack_zones_dbscan.pkl')
+        zones = load_zones('app/models/wildtrack_zones_dbscan.pkl')
+
         
         # Get zone info
         zone_info = get_zone_info(zone_id, zones)
@@ -198,7 +201,7 @@ async def get_zone_details(
                     })
             
             return {
-                "role": "researcher",
+                "role": "field_researcher",
                 "zone_id": zone_info['zone_id'],
                 "species": zone_info['species'],
                 "center": {
@@ -215,7 +218,7 @@ async def get_zone_details(
         else:
             # Citizens only get boundary (convex hull) - NO exact GPS points, NO center
             return {
-                "role": "citizen",
+                "role": "public",
                 "zone_id": zone_info['zone_id'],
                 "species": zone_info['species'],
                 "boundary": [
@@ -230,10 +233,11 @@ async def get_zone_details(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/zones/species/{species_name}")
 async def get_zones_by_species(
     species_name: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_active_user)
 ):
     """
     Get all zones for a specific species.
@@ -241,7 +245,8 @@ async def get_zones_by_species(
     - Citizens: Get only boundaries
     """
     try:
-        zones = load_zones('wildtrack_zones_dbscan.pkl')
+        zones = load_zones('app/models/wildtrack_zones_dbscan.pkl')
+
         
         if species_name not in zones['unique_species']:
             raise HTTPException(status_code=404, detail=f"Species '{species_name}' not found")
@@ -277,7 +282,7 @@ async def get_zones_by_species(
                 })
         
         return {
-            "role": "researcher" if user_is_researcher else "citizen",
+            "role": "field_researcher" if user_is_researcher else "public",
             "species": species_name,
             "zone_count": len(zones_data),
             "zones": zones_data
@@ -285,5 +290,81 @@ async def get_zones_by_species(
     
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/zones/all/test-public")
+async def test_zones_public():
+    """Test endpoint - Public view (no auth required)"""
+    try:
+        zones = load_zones('app/models/wildtrack_zones_dbscan.pkl')
+
+        zones_boundaries = {}
+        
+        for zone_id in range(zones['n_zones']):
+            zone_info = get_zone_info(zone_id, zones)
+            
+            zones_boundaries[zone_id] = {
+                "zone_id": zone_id,
+                "species": zone_info['species'],
+                "boundary": [
+                    {"latitude": float(point[0]), "longitude": float(point[1])}
+                    for point in zone_info['boundary']
+                ]
+            }
+        
+        return {
+            "role": "public",
+            "total_zones": zones['n_zones'],
+            "unique_species": zones['unique_species'],
+            "zones": zones_boundaries
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/zones/all/test-researcher")
+async def test_zones_researcher():
+    """Test endpoint - Researcher view (no auth required)"""
+    try:
+        zones = load_zones('app/models/wildtrack_zones_dbscan.pkl')
+
+        gps_data, species_list, timestamps = load_from_supabase()
+        
+        zones_with_points = {}
+        
+        for zone_id in range(zones['n_zones']):
+            zone_info = get_zone_info(zone_id, zones)
+            zone_points = []
+            
+            for i, label in enumerate(zones['labels']):
+                if label == zone_id:
+                    zone_points.append({
+                        'latitude': float(gps_data[i][0]),
+                        'longitude': float(gps_data[i][1]),
+                        'timestamp': timestamps[i]
+                    })
+            
+            zones_with_points[zone_id] = {
+                "zone_id": zone_id,
+                "species": zone_info['species'],
+                "center": {
+                    "latitude": float(zone_info['center'][0]),
+                    "longitude": float(zone_info['center'][1])
+                },
+                "boundary": [
+                    {"latitude": float(point[0]), "longitude": float(point[1])}
+                    for point in zone_info['boundary']
+                ],
+                "individual_points": zone_points,
+                "point_count": len(zone_points)
+            }
+        
+        return {
+            "role": "field_researcher",
+            "total_zones": zones['n_zones'],
+            "unique_species": zones['unique_species'],
+            "zones": zones_with_points
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
