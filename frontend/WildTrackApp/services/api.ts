@@ -419,6 +419,32 @@ export const zonesAPI = {
     return handleResponse(response);
   },
 
+  // Get clusters from database (no auth required)
+  async getClusters() {
+    const response = await fetch(`${API_BASE_URL}/zones/clusters`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    return handleResponse<{
+      clusters: Array<{
+        cluster_id: number;
+        species: string;
+        center: { latitude: number; longitude: number };
+        points: Array<{ latitude: number; longitude: number; timestamp: string | null }>;
+        count: number;
+      }>;
+      total_points: number;
+    }>(response);
+  },
+
   // Get top 3 endangered species near user location (no auth required)
   async getNearbyEndangeredSpecies(latitude: number, longitude: number, radiusKm: number = 50) {
     const params = `?latitude=${latitude}&longitude=${longitude}&radius_km=${radiusKm}`;

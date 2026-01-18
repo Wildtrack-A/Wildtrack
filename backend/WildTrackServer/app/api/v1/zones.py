@@ -11,8 +11,39 @@ sys.path.insert(0, PROJECT_ROOT)
 from app.models.dbscan_db import load_zones, get_zone_info, species_summary_dbscan, load_from_supabase
 from app.auth import get_current_active_user
 from app.database import get_supabase_client
+import time
 
+# Create router with NO dependencies - all routes are public by default
 router = APIRouter()
+
+# Cache for observation data - load once, reuse for all endpoints
+_observation_cache = {
+    "data": None,
+    "timestamp": 0,
+    "cache_ttl": 300  # Cache for 5 minutes (300 seconds)
+}
+
+def get_cached_observations(limit=2000):
+    """
+    Get observations from cache or load from database if cache is empty/expired.
+    Returns: (gps_data, species_list, timestamps)
+    Limited to 2000 points by default for faster loading.
+    """
+    current_time = time.time()
+    
+    # Check if cache is valid
+    if (_observation_cache["data"] is None or 
+        (current_time - _observation_cache["timestamp"]) > _observation_cache["cache_ttl"]):
+        print(f"Loading observations from database (cache miss or expired)... Limit: {limit}")
+        # Limit to reduce load time
+        gps_data, species_list, timestamps = load_from_supabase(limit=limit)
+        _observation_cache["data"] = (gps_data, species_list, timestamps)
+        _observation_cache["timestamp"] = current_time
+        print(f"Cached {len(gps_data)} observations")
+    else:
+        print(f"Using cached observations ({len(_observation_cache['data'][0])} points)")
+    
+    return _observation_cache["data"]
 
 # Helper function to check if user is researcher
 async def is_researcher(current_user: dict = Depends(get_current_active_user)) -> bool:
@@ -66,7 +97,7 @@ async def get_all_zones(
         if user_is_researcher:
             # Researchers get everything: all boundaries + all GPS points
             # Load all GPS data
-            gps_data, species_list, timestamps = load_from_supabase()
+            gps_data, species_list, timestamps = get_cached_observations()
             
             # Group points by zone
             zones_with_points = {}
@@ -185,6 +216,162 @@ async def get_zones_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Public endpoints must come BEFORE parameterized routes to avoid route conflicts
+@router.get("/zones/clusters")
+async def get_clusters():
+    """
+    Simple: Database -> return clusters for map display.
+    No auth required - public data.
+    Optimized: Uses spatial grid for faster clustering, limited to 2000 points.
+    """
+    try:
+        # Load observations with reduced limit for faster loading
+        MAX_POINTS = 2000
+        gps_data, species_list, timestamps = get_cached_observations(limit=MAX_POINTS)
+        
+        if not gps_data:
+            return {"clusters": [], "total_points": 0}
+        
+        print(f"Starting clustering for {len(gps_data)} points...")
+        
+        # Optimized clustering: Use spatial grid (0.1 degree ≈ 11km)
+        # Group points by grid cell first, then cluster within cells
+        grid_size = 0.1  # degrees
+        grid_clusters = {}  # {(grid_lat, grid_lon, species): [points]}
+        
+        print("Building spatial grid...")
+        for i, (lat, lon) in enumerate(gps_data):
+            species = species_list[i] if i < len(species_list) else "Unknown"
+            
+            # Calculate grid cell
+            grid_lat = int(lat / grid_size)
+            grid_lon = int(lon / grid_size)
+            grid_key = (grid_lat, grid_lon, species)
+            
+            if grid_key not in grid_clusters:
+                grid_clusters[grid_key] = []
+            
+            grid_clusters[grid_key].append({
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "timestamp": timestamps[i] if i < len(timestamps) else None
+            })
+        
+        print(f"Created {len(grid_clusters)} grid cells, now creating clusters...")
+        
+        # Convert grid cells to clusters
+        clusters = []
+        cluster_id = 0
+        
+        for grid_key, points in grid_clusters.items():
+            if not points:
+                continue
+            
+            # Calculate center of grid cell
+            center_lat = sum(p["latitude"] for p in points) / len(points)
+            center_lon = sum(p["longitude"] for p in points) / len(points)
+            
+            clusters.append({
+                "cluster_id": cluster_id,
+                "species": grid_key[2],  # species from grid key
+                "center": {"latitude": center_lat, "longitude": center_lon},
+                "points": points,
+                "count": len(points)
+            })
+            cluster_id += 1
+        
+        print(f"Created {len(clusters)} clusters from {len(gps_data)} points")
+        
+        return {
+            "clusters": clusters,
+            "total_points": len(gps_data)
+        }
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in get_clusters: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/zones/nearby-endangered")
+async def get_nearby_endangered_species(
+    latitude: float = Query(..., description="User's latitude"),
+    longitude: float = Query(..., description="User's longitude"),
+    radius_km: float = Query(50, description="Search radius in kilometers (default: 50km)")
+):
+    """
+    Simple: Database -> calculate top 3 endangered near user -> return.
+    No auth required - public data.
+    """
+    try:
+        from app.database import get_admin_supabase_client
+        
+        supabase = get_admin_supabase_client()
+        
+        # Get endangered species list
+        try:
+            endangered_response = supabase.table("endangered_species").select("species_name").eq("is_endangered", True).execute()
+            endangered_species_names = [row["species_name"] for row in endangered_response.data] if endangered_response.data else []
+        except Exception as e:
+            print(f"Warning: Could not query endangered_species table: {e}")
+            endangered_species_names = []
+        
+        if not endangered_species_names:
+            return {
+                "user_location": {"latitude": latitude, "longitude": longitude},
+                "radius_km": radius_km,
+                "top_species": []
+            }
+        
+        # Load observations from cache (or database if not cached)
+        gps_data, species_list, timestamps = get_cached_observations()
+        
+        # Count endangered species within radius
+        species_data = {}
+        
+        for i, (lat, lon) in enumerate(gps_data):
+            species = species_list[i] if i < len(species_list) else "Unknown"
+            
+            if species in endangered_species_names:
+                distance = calculate_distance(latitude, longitude, float(lat), float(lon))
+                
+                if distance <= radius_km:
+                    if species not in species_data:
+                        species_data[species] = {"count": 0, "min_distance": distance}
+                    
+                    species_data[species]["count"] += 1
+                    if distance < species_data[species]["min_distance"]:
+                        species_data[species]["min_distance"] = distance
+        
+        # Sort by count (descending), then distance (ascending), get top 3
+        sorted_species = sorted(
+            species_data.items(),
+            key=lambda x: (-x[1]["count"], x[1]["min_distance"])
+        )[:3]
+        
+        # Format response
+        result = []
+        for species, data in sorted_species:
+            result.append({
+                "species": species,
+                "sighting_count": data["count"],
+                "distance_km": round(data["min_distance"], 2)
+            })
+        
+        return {
+            "user_location": {"latitude": latitude, "longitude": longitude},
+            "radius_km": radius_km,
+            "top_species": result
+        }
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in get_nearby_endangered_species: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/zones/{zone_id}")
 async def get_zone_details(
     zone_id: int,
@@ -209,7 +396,7 @@ async def get_zone_details(
         if user_is_researcher:
             # Researchers get everything: center, boundary, and individual GPS points
             # Get all GPS points for this zone
-            gps_data, species_list, timestamps = load_from_supabase()
+            gps_data, species_list, timestamps = get_cached_observations()
             zone_points = []
             
             for i, label in enumerate(zones['labels']):
@@ -400,89 +587,3 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2 * math.asin(math.sqrt(a))
     
     return R * c
-
-@router.get("/zones/nearby-endangered")
-async def get_nearby_endangered_species(
-    latitude: float = Query(..., description="User's latitude"),
-    longitude: float = Query(..., description="User's longitude"),
-    radius_km: float = Query(50, description="Search radius in kilometers (default: 50km)")
-):
-    """
-    Simple endpoint: Get top 3 endangered species by count closest to user.
-    No auth required - public data.
-    """
-    try:
-        from app.database import get_admin_supabase_client
-        
-        supabase = get_admin_supabase_client()
-        
-        # Step 1: Get endangered species list from database
-        try:
-            endangered_response = supabase.table("endangered_species").select("species_name").eq("is_endangered", True).execute()
-            endangered_species_names = [row["species_name"] for row in endangered_response.data] if endangered_response.data else []
-            print(f"Found {len(endangered_species_names)} endangered species in database")
-        except Exception as e:
-            print(f"Warning: Could not query endangered_species table: {e}")
-            endangered_species_names = []
-        
-        if not endangered_species_names:
-            return {
-                "user_location": {"latitude": latitude, "longitude": longitude},
-                "radius_km": radius_km,
-                "top_species": []
-            }
-        
-        # Step 2: Load observations from database
-        gps_data, species_list, timestamps = load_from_supabase()
-        print(f"Loaded {len(gps_data)} observations from database")
-        
-        # Step 3: Count endangered species within radius
-        species_data = {}  # {species: {"count": int, "min_distance": float}}
-        
-        for i, (lat, lon) in enumerate(gps_data):
-            species = species_list[i] if i < len(species_list) else "Unknown"
-            
-            # Only process if species is endangered
-            if species in endangered_species_names:
-                distance = calculate_distance(latitude, longitude, float(lat), float(lon))
-                
-                # Only count within radius
-                if distance <= radius_km:
-                    if species not in species_data:
-                        species_data[species] = {"count": 0, "min_distance": distance}
-                    
-                    species_data[species]["count"] += 1
-                    # Track nearest distance
-                    if distance < species_data[species]["min_distance"]:
-                        species_data[species]["min_distance"] = distance
-        
-        print(f"Found {len(species_data)} endangered species within {radius_km}km")
-        
-        # Step 4: Sort by count (descending), then distance (ascending), get top 3
-        sorted_species = sorted(
-            species_data.items(),
-            key=lambda x: (-x[1]["count"], x[1]["min_distance"])
-        )[:3]
-        
-        # Step 5: Format response
-        result = []
-        for species, data in sorted_species:
-            result.append({
-                "species": species,
-                "sighting_count": data["count"],
-                "distance_km": round(data["min_distance"], 2)
-            })
-        
-        print(f"Returning top 3: {[r['species'] for r in result]}")
-        
-        return {
-            "user_location": {"latitude": latitude, "longitude": longitude},
-            "radius_km": radius_km,
-            "top_species": result
-        }
-        
-    except Exception as e:
-        import traceback
-        error_msg = f"Error in get_nearby_endangered_species: {str(e)}\n{traceback.format_exc()}"
-        print(error_msg)
-        raise HTTPException(status_code=500, detail=str(e))

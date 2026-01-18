@@ -32,7 +32,10 @@ def load_from_supabase(species_filter=None, limit=None):
     total_count = count_response.count
     print(f"Total records in database: {total_count}")
     
-    while offset < total_count:
+    # Adjust total_count if limit is specified
+    max_records = limit if limit else total_count
+    
+    while offset < total_count and len(all_data) < max_records:
         # Build fresh query for each page
         query = supabase.table("observations").select(
             "latitude, longitude, species, timestamp"
@@ -41,8 +44,13 @@ def load_from_supabase(species_filter=None, limit=None):
         if species_filter:
             query = query.eq("species", species_filter)
         
-        # Use offset and limit
-        response = query.order("timestamp").limit(page_size).offset(offset).execute()
+        # Calculate how many records we still need
+        remaining = max_records - len(all_data)
+        current_page_size = min(page_size, remaining)
+        
+        # Use offset and limit - order by timestamp DESC for most recent data
+        # This is faster than ASC and gives more recent sightings
+        response = query.order("timestamp", desc=True).limit(current_page_size).offset(offset).execute()
         
         if not response.data or len(response.data) == 0:
             print(f"No more data at offset {offset}")
@@ -53,18 +61,20 @@ def load_from_supabase(species_filter=None, limit=None):
         
         # Print progress every 10 pages
         if (offset // page_size) % 10 == 0:
-            print(f"Progress: {len(all_data)}/{total_count} records ({(len(all_data)/total_count*100):.1f}%)")
+            print(f"Progress: {len(all_data)}/{max_records} records ({(len(all_data)/max_records*100):.1f}%)")
         
         offset += fetched_count
+        
+        # Stop if we've reached the limit
+        if len(all_data) >= max_records:
+            print(f"Reached limit of {max_records} records, stopping fetch")
+            break
         
         # Safety check
         if len(all_data) >= total_count:
             break
     
     print(f"Finished fetching {len(all_data)} records")
-    
-    if limit:
-        all_data = all_data[:limit]
     
     if not all_data:
         print("No data found in observations table")

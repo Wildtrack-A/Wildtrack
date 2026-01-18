@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { View, StyleSheet, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, Dimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import MapView, { Marker, Circle, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { journalAPI, zonesAPI, ZonePoint, Zone, ZonesResponse } from '../services/api';
@@ -30,7 +30,7 @@ function MapScreen() {
   const [selectedSpecies, setSelectedSpecies] = useState<string | null>(null);
   const [dropdownVisible, setDropdownVisible] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [topSpecies, setTopSpecies] = useState<Array<{ species: string; count: number; distance_km?: number }>>([]);
+  // Removed topSpecies state - no longer using top 3 endangered species feature
   const [mapReady, setMapReady] = useState(false);
   const [dataView, setDataView] = useState<'my-data' | 'world-data'>('my-data');
   const [zoneData, setZoneData] = useState<(ZonePoint & { species?: string })[]>([]);
@@ -39,6 +39,8 @@ function MapScreen() {
   const [userRole, setUserRole] = useState<'field_researcher' | 'public'>('public');
   const [selectedMarker, setSelectedMarker] = useState<{ point: any; species: string; count?: number; allPoints?: any[] } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<{ center: { lat: number; lng: number }; species: string; count: number; points: any[] } | null>(null);
+  const [clustersLoaded, setClustersLoaded] = useState(false); // Track if clusters have been loaded
+  // Removed topNearbySpecies state - now using nearestClusters useMemo instead
 
   // Track user location continuously
   useEffect(() => {
@@ -147,158 +149,92 @@ function MapScreen() {
     }
   }, [dataView]);
 
-  // Load top 3 endangered species near user location (only for World Data)
-  useEffect(() => {
-    if (dataView === 'world-data' && userLocation) {
-      const loadNearbyEndangered = async () => {
-        try {
-          console.log('📍 Loading nearby endangered species for location:', userLocation);
-          const response = await zonesAPI.getNearbyEndangeredSpecies(
-            userLocation.latitude,
-            userLocation.longitude,
-            50 // 50km radius
-          );
-          
-          console.log('📥 Response:', response);
-          
-          if (response.top_species && response.top_species.length > 0) {
-            const top = response.top_species.map(item => ({
-              species: item.species,
-              count: item.sighting_count,
-              distance_km: item.distance_km
-            }));
-            
-            console.log('✅ Loaded nearby endangered species:', top);
-            setTopSpecies(top);
-          } else {
-            console.log('⚠️ No endangered species found nearby');
-            setTopSpecies([]);
-          }
-        } catch (error: any) {
-          // Better error handling
-          let errorMessage = 'Unknown error';
-          if (error?.message) {
-            errorMessage = error.message;
-          } else if (typeof error === 'string') {
-            errorMessage = error;
-          } else if (error?.toString) {
-            errorMessage = error.toString();
-          }
-          
-          console.error('❌ Error loading nearby endangered species:', errorMessage);
-          console.error('Full error object:', JSON.stringify(error, null, 2));
-          
-          // Set empty list on error
-          setTopSpecies([]);
-        }
-      };
-      
-      loadNearbyEndangered();
-    } else if (dataView === 'my-data') {
-      // For My Data, calculate from user's logs
-      const speciesMap = new Map<string, number>();
-      userLogs.forEach(log => {
-        if (log.species) {
-          const count = speciesMap.get(log.species) || 0;
-          speciesMap.set(log.species, count + 1);
-        }
-      });
-      const top = Array.from(speciesMap.entries())
-        .map(([species, count]) => ({ species, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 3);
-      setTopSpecies(top);
-    } else {
-      // Clear top species when not in world-data or my-data
-      setTopSpecies([]);
-    }
-  }, [dataView, userLocation, zoneData, userLogs]);
+  // Removed top 3 endangered species feature - just showing clusters now
 
-  // Load zone data when "World Data" is selected
+  // Load zone data when "World Data" is selected (only once unless manually reloaded)
   useEffect(() => {
-    if (dataView === 'world-data') {
+    if (dataView === 'world-data' && !clustersLoaded) {
       loadZoneData();
-    } else {
+    } else if (dataView === 'my-data') {
       // Clear zone data and world data error when switching to "My Data"
-      setZoneData([]);
-      setZones({});
+      // But keep clustersLoaded flag so we don't reload when switching back
       setWorldDataError(null);
       setError(null); // Clear any general error
     }
-  }, [dataView]);
+  }, [dataView, clustersLoaded]);
 
   const loadZoneData = async () => {
     setLoadingZones(true);
     setWorldDataError(null);
     setError(null);
     try {
-      console.log('🔄 Loading zone data...');
-      // zonesAPI.getAllZones() already handles auth fallback internally
-      const response = await zonesAPI.getAllZones();
+      console.log('🔄 Loading clusters from database...');
       
-      console.log('📥 Zone data response:', {
-        total_zones: response.total_zones,
-        unique_species: response.unique_species?.length || 0,
-        zones_count: typeof response.zones === 'object' ? Object.keys(response.zones).length : 0,
-        role: response.role
+      // Simple: Load clusters directly from database
+      const response = await zonesAPI.getClusters();
+      
+      console.log('📥 Clusters response:', {
+        total_clusters: response.clusters.length,
+        total_points: response.total_points
       });
       
-      // Store user role
-      setUserRole(response.role || 'public');
-      
-      // Extract all individual GPS points from zones with species info
+      // Convert clusters to points for map display
       const allPoints: (ZonePoint & { species?: string })[] = [];
-      const zonesMap: Record<number, Zone> = {};
       
-      if (Array.isArray(response.zones)) {
-        response.zones.forEach((zone: Zone) => {
-          zonesMap[zone.zone_id] = zone;
-          if (zone.individual_points && zone.individual_points.length > 0) {
-            // Add species info to each point
-            const pointsWithSpecies = zone.individual_points.map(point => ({
-              ...point,
-              species: zone.species,
-            }));
-            allPoints.push(...pointsWithSpecies);
-          }
+      response.clusters.forEach((cluster) => {
+        // Add all points from this cluster
+        cluster.points.forEach((point) => {
+          allPoints.push({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            timestamp: point.timestamp || undefined,
+            species: cluster.species,
+          });
         });
-      } else if (typeof response.zones === 'object' && response.zones !== null) {
-        (Object.values(response.zones) as Zone[]).forEach((zone: Zone) => {
-          zonesMap[zone.zone_id] = zone;
-          if (zone.individual_points && zone.individual_points.length > 0) {
-            // Add species info to each point
-            const pointsWithSpecies = zone.individual_points.map(point => ({
-              ...point,
-              species: zone.species,
-            }));
-            allPoints.push(...pointsWithSpecies);
-          }
-        });
-      }
+      });
       
-      console.log(`✅ Loaded ${allPoints.length} GPS points from ${Object.keys(zonesMap).length} zones`);
-      console.log(`👤 User role: ${response.role}`);
+      console.log(`✅ Loaded ${allPoints.length} GPS points from ${response.clusters.length} clusters`);
       
       if (allPoints.length === 0) {
-        console.warn('⚠️ No GPS points found in zone data. Zones may only have boundaries.');
-        // Still set the zones map even if no points, so boundaries can be displayed
-        setZones(zonesMap);
+        console.warn('⚠️ No GPS points found in clusters.');
         setZoneData([]);
-        // Show dismissible popup instead of blocking error
         setShowZoneWarningPopup(true);
+        setClustersLoaded(true); // Mark as loaded even if empty
       } else {
         setZoneData(allPoints);
-        setZones(zonesMap);
         setWorldDataError(null);
         setShowZoneWarningPopup(false);
+        setClustersLoaded(true); // Mark clusters as loaded
       }
     } catch (error: any) {
-      console.error('❌ Error loading zone data:', error);
-      setWorldDataError(error.message || 'Failed to load zone data. Make sure the backend is running and has zone data.');
+      console.error('❌ Error loading clusters:', error);
+      setWorldDataError(error.message || 'Failed to load clusters. Make sure the backend is running.');
+      setClustersLoaded(true); // Mark as attempted even on error
     } finally {
       setLoadingZones(false);
     }
   };
+
+  // Manual recluster function
+  const handleRecluster = () => {
+    console.log('🔄 Manual recluster requested');
+    setClustersLoaded(false); // Reset flag to allow reload
+    loadZoneData();
+  };
+
+  // Calculate distance between two coordinates using Haversine formula
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in km
+  };
+
 
   // Get unique icon and color for each species
   const getSpeciesIcon = (species: string): { name: any; color: string } => {
@@ -439,20 +375,50 @@ function MapScreen() {
       points = zoneData.filter((point: any) => 
         point.species && point.species.toLowerCase() === selectedSpecies.toLowerCase()
       );
-    } else if (topSpecies.length > 0) {
-      const topSpeciesNames = topSpecies.map(s => s.species.toLowerCase());
-      points = zoneData.filter((point: any) => 
-        point.species && topSpeciesNames.includes(point.species.toLowerCase())
-      );
+    } else {
+      // Show all zone data points
+      points = zoneData;
     }
 
     // Only create clusters if we have points
     if (points.length === 0) {
+      console.log('⚠️ No points available for clustering');
       return [];
     }
 
-    return clusterPoints(points, 0.01); // 0.01 degree ≈ 1km
-  }, [zoneData, dataView, selectedSpecies, topSpecies]);
+    const result = clusterPoints(points, 0.01); // 0.01 degree ≈ 1km
+    console.log(`✅ Created ${result.length} clusters from ${points.length} points`);
+    return result;
+  }, [zoneData, dataView, selectedSpecies]);
+
+  // Calculate top 3 nearest clusters to user location
+  const nearestClusters = useMemo(() => {
+    if (dataView !== 'world-data' || !userLocation || clusters.length === 0) {
+      return [];
+    }
+
+    // Calculate distance from user to each cluster
+    const clustersWithDistance = clusters.map(cluster => {
+      const distance = calculateDistance(
+        userLocation.latitude,
+        userLocation.longitude,
+        cluster.center.lat,
+        cluster.center.lng
+      );
+      return {
+        ...cluster,
+        distance_km: distance
+      };
+    });
+
+    // Sort by distance and take top 3
+    const sorted = clustersWithDistance.sort((a, b) => a.distance_km - b.distance_km);
+    return sorted.slice(0, 3).map(cluster => ({
+      species: cluster.species,
+      sighting_count: cluster.count,
+      distance_km: Math.round(cluster.distance_km * 100) / 100 // Round to 2 decimal places
+    }));
+  }, [clusters, userLocation, dataView, calculateDistance]);
 
   // Get filtered logs or zone points based on data view
   const filteredLogs = useMemo(() => {
@@ -467,12 +433,6 @@ function MapScreen() {
         if (selectedSpecies) {
           points = zoneData.filter((point: any) => 
             point.species && point.species.toLowerCase() === selectedSpecies.toLowerCase()
-          );
-        } else if (topSpecies.length > 0) {
-          // Filter to top 3 species
-          const topSpeciesNames = topSpecies.map(s => s.species.toLowerCase());
-          points = zoneData.filter((point: any) => 
-            point.species && topSpeciesNames.includes(point.species.toLowerCase())
           );
         }
         
@@ -508,23 +468,10 @@ function MapScreen() {
         );
       }
       
-      // If we have top species, prioritize showing those, but also show others
-      if (topSpecies.length > 0) {
-        const topSpeciesNames = topSpecies.map(s => s.species.toLowerCase());
-        
-        // Get logs that match top 3 species
-        const topSpeciesLogs = logsWithLocations.filter(log =>
-          log.species && topSpeciesNames.includes(log.species.toLowerCase())
-        );
-        
-        // If we found matches, return them; otherwise show all logs
-        return topSpeciesLogs.length > 0 ? topSpeciesLogs : logsWithLocations;
-      }
-      
-      // If no top species calculated yet, show all logs with locations
+      // Show all logs with locations
       return logsWithLocations;
     }
-  }, [selectedSpecies, userLogs, topSpecies, dataView, zoneData, zones]);
+  }, [selectedSpecies, userLogs, dataView, zoneData, zones]);
 
   // Group markers for "My Data" view
   const groupedMyDataMarkers = useMemo(() => {
@@ -658,30 +605,83 @@ function MapScreen() {
             const color = getSpeciesColor(cluster.species);
             const iconInfo = getSpeciesIcon(cluster.species);
             
+            // Convert hex color to rgba for Circle component
+            const hexToRgba = (hex: string, alpha: number) => {
+              const r = parseInt(hex.slice(1, 3), 16);
+              const g = parseInt(hex.slice(3, 5), 16);
+              const b = parseInt(hex.slice(5, 7), 16);
+              return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+            };
+            
             return (
-              <Marker
-                key={`cluster-${index}-${cluster.center.lat}-${cluster.center.lng}`}
-                coordinate={{
-                  latitude: cluster.center.lat,
-                  longitude: cluster.center.lng,
-                }}
-                onPress={() => {
-                  console.log('📍 Cluster clicked:', cluster);
-                  setSelectedCluster(cluster);
-                  setSelectedMarker(null); // Clear any selected marker
-                }}
-                tracksViewChanges={false}
-              >
-                <View style={styles.clusterContainer}>
-                  <View style={[styles.clusterPulse, { backgroundColor: color }]} />
-                  <View style={[styles.clusterMarker, { backgroundColor: color, borderColor: color }]}>
-                    <Ionicons name={iconInfo.name} size={18} color="#fff" style={styles.clusterIcon} />
-                    <Text style={styles.clusterText}>{cluster.count}</Text>
+              <View key={`cluster-wrapper-${index}`}>
+                {/* Large circle around cluster for maximum visibility */}
+                <Circle
+                  center={{
+                    latitude: cluster.center.lat,
+                    longitude: cluster.center.lng,
+                  }}
+                  radius={1000} // 1km radius - VERY visible
+                  fillColor={hexToRgba(color, 0.35)} // 35% opacity - very visible
+                  strokeColor={color}
+                  strokeWidth={6} // Thicker border
+                />
+                
+                {/* Medium circle for additional visibility */}
+                <Circle
+                  center={{
+                    latitude: cluster.center.lat,
+                    longitude: cluster.center.lng,
+                  }}
+                  radius={500} // 500m radius
+                  fillColor={hexToRgba(color, 0.25)} // 25% opacity
+                  strokeColor={color}
+                  strokeWidth={5}
+                />
+                
+                {/* Cluster marker */}
+                <Marker
+                  key={`cluster-${index}-${cluster.center.lat}-${cluster.center.lng}`}
+                  coordinate={{
+                    latitude: cluster.center.lat,
+                    longitude: cluster.center.lng,
+                  }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  onPress={() => {
+                    console.log('📍 Cluster clicked:', cluster);
+                    setSelectedCluster(cluster);
+                    setSelectedMarker(null); // Clear any selected marker
+                  }}
+                  tracksViewChanges={false}
+                >
+                  <View style={styles.clusterContainer}>
+                    {/* Large outer pulse ring */}
+                    <View style={[styles.clusterPulseOuter, { backgroundColor: color }]} />
+                    {/* Medium pulse ring */}
+                    <View style={[styles.clusterPulse, { backgroundColor: color }]} />
+                    {/* Main cluster marker - LARGE and visible */}
+                    <View style={[styles.clusterMarker, { backgroundColor: color, borderColor: '#fff' }]}>
+                      <Ionicons name={iconInfo.name} size={40} color="#fff" />
+                      {cluster.count > 1 && (
+                        <View style={styles.clusterCountBadge}>
+                          <Text style={styles.clusterCountText}>{cluster.count}</Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
-                </View>
-              </Marker>
+                </Marker>
+              </View>
             );
           })}
+          
+          {/* Debug: Show cluster count */}
+          {dataView === 'world-data' && (
+            <View style={styles.debugClusterCount}>
+              <Text style={styles.debugClusterCountText}>
+                {clusters.length > 0 ? `${clusters.length} cluster${clusters.length !== 1 ? 's' : ''} visible` : 'No clusters found'}
+              </Text>
+            </View>
+          )}
 
           {/* Markers for user's logs (My Data) - grouped if overlapping */}
           {dataView === 'my-data' && groupedMyDataMarkers.map((group, index) => {
@@ -721,8 +721,13 @@ function MapScreen() {
           <View style={styles.overlay}>
             <ActivityIndicator size="large" color="#007AFF" />
             <Text style={styles.overlayText}>
-              {dataView === 'world-data' ? 'Loading zone data...' : 'Loading logs...'}
+              {dataView === 'world-data' ? 'Loading clusters from database...' : 'Loading logs...'}
             </Text>
+            {loadingZones && (
+              <Text style={styles.overlaySubtext}>
+                This may take a few moments
+              </Text>
+            )}
           </View>
         )}
         
@@ -811,6 +816,60 @@ function MapScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* World Data - Recluster Button */}
+        {dataView === 'world-data' && (
+          <View style={styles.headerSection}>
+            <View style={styles.worldDataHeader}>
+              <Text style={styles.headerTitle}>World Data</Text>
+              <TouchableOpacity
+                style={styles.reclusterButton}
+                onPress={handleRecluster}
+                disabled={loadingZones}
+              >
+                <Ionicons 
+                  name="refresh" 
+                  size={18} 
+                  color="#fff" 
+                />
+                <Text style={styles.reclusterButtonText}>
+                  {loadingZones ? 'Loading...' : 'Recluster'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            
+            {/* Top 3 Nearest Clusters */}
+            {nearestClusters.length > 0 ? (
+              <View style={styles.topAnimalsContainer}>
+                <Text style={styles.topAnimalsTitle}>🦁 Top 3 Nearest Animals</Text>
+                {nearestClusters.map((item, index) => {
+                  const iconInfo = getSpeciesIcon(item.species);
+                  return (
+                    <View key={index} style={styles.topAnimalItem}>
+                      <View style={[styles.topAnimalIcon, { backgroundColor: iconInfo.color }]}>
+                        <Ionicons name={iconInfo.name} size={18} color="#fff" />
+                      </View>
+                      <View style={styles.topAnimalInfo}>
+                        <Text style={styles.topAnimalName}>{item.species}</Text>
+                        <Text style={styles.topAnimalDistance}>{item.distance_km} km away • {item.sighting_count} sighting{item.sighting_count !== 1 ? 's' : ''}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : dataView === 'world-data' && clusters.length > 0 && !userLocation ? (
+              <View style={styles.topAnimalsContainer}>
+                <Text style={styles.topAnimalsTitle}>🦁 Top 3 Nearest Animals</Text>
+                <Text style={styles.noAnimalsText}>Enable location to see nearest animals</Text>
+              </View>
+            ) : dataView === 'world-data' && clusters.length === 0 ? (
+              <View style={styles.topAnimalsContainer}>
+                <Text style={styles.topAnimalsTitle}>🦁 Top 3 Nearest Animals</Text>
+                <Text style={styles.noAnimalsText}>No clusters available</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
 
         {/* My Data - Show all user logs */}
         {dataView === 'my-data' && (
@@ -902,46 +961,6 @@ function MapScreen() {
           </View>
         )}
 
-        {/* Header Section - Only show in World Data */}
-        {dataView === 'world-data' && (
-          <View style={styles.headerSection}>
-            <Text style={styles.headerTitle}>Endangered Animals in Your Area</Text>
-            
-            {/* Top 3 Species List */}
-            <View style={styles.topSpeciesContainer}>
-              {topSpecies.length > 0 ? (
-                topSpecies.map((item, index) => {
-                  const iconInfo = getSpeciesIcon(item.species);
-                  return (
-                    <View key={item.species} style={styles.topSpeciesItem}>
-                      <View style={styles.topSpeciesRank}>
-                        <View style={[styles.topSpeciesIconContainer, { backgroundColor: `${iconInfo.color}20`, borderColor: iconInfo.color }]}>
-                          <Ionicons name={iconInfo.name} size={20} color={iconInfo.color} />
-                        </View>
-                        <Text style={styles.topSpeciesRankText}>{index + 1}</Text>
-                      </View>
-                      <View style={styles.topSpeciesInfo}>
-                        <Text style={styles.topSpeciesName}>{item.species}</Text>
-                        <View style={styles.topSpeciesDetails}>
-                          <Text style={styles.topSpeciesCount}>{item.count} sightings</Text>
-                          {item.distance_km !== undefined && (
-                            <Text style={styles.topSpeciesDistance}>
-                              📍 {item.distance_km.toFixed(1)} km away
-                            </Text>
-                          )}
-                        </View>
-                      </View>
-                    </View>
-                  );
-                })
-              ) : (
-                <Text style={styles.noDataText}>
-                  {userLocation ? 'No endangered species found nearby' : 'Waiting for location...'}
-                </Text>
-              )}
-            </View>
-          </View>
-        )}
 
           {/* Species Filter Dropdown - Only show in World Data */}
           {dataView === 'world-data' && (
@@ -1011,8 +1030,8 @@ function MapScreen() {
                 </Text>
                 {!selectedSpecies && <Ionicons name="checkmark" size={20} color="#007AFF" />}
               </TouchableOpacity>
-              {/* Show available species based on current view */}
-              {(dataView === 'my-data' ? availableSpecies : topSpecies).map(({ species, count }) => {
+              {/* Show available species */}
+              {availableSpecies.map(({ species, count }) => {
                 const locationCount = userLogs.filter(log =>
                   log.species && log.species.toLowerCase() === species.toLowerCase() &&
                   log.latitude && log.longitude
@@ -1319,6 +1338,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  overlaySubtext: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#999',
+    fontWeight: '400',
+  },
   errorText: {
     marginTop: 12,
     fontSize: 14,
@@ -1390,34 +1415,165 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   clusterMarker: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 80, // MUCH larger - 80x80 pixels
+    height: 80,
+    borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 6, // Thicker border
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.8, // More prominent shadow
+    shadowRadius: 12,
+    elevation: 20, // Higher elevation for Android
+    position: 'relative',
+  },
+  clusterCountBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#FF3B30',
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
     borderWidth: 3,
+    borderColor: '#fff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.5,
     shadowRadius: 4,
     elevation: 6,
   },
-  clusterText: {
+  clusterCountText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: 'bold',
-    marginTop: 2,
-  },
-  clusterIcon: {
-    marginBottom: 2,
   },
   clusterPulse: {
     position: 'absolute',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    opacity: 0.3,
+    width: 120, // Larger pulse
+    height: 120,
+    borderRadius: 60,
+    opacity: 0.4, // More visible
     zIndex: -1,
+  },
+  clusterPulseOuter: {
+    position: 'absolute',
+    width: 160, // Even larger outer pulse
+    height: 160,
+    borderRadius: 80,
+    opacity: 0.25, // More visible
+    zIndex: -2,
+  },
+  debugClusterCount: {
+    position: 'absolute',
+    top: 100,
+    right: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    zIndex: 1000,
+  },
+  debugClusterCountText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  worldDataHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  reclusterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  reclusterButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  topAnimalsContainer: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  topAnimalsTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 12,
+  },
+  topAnimalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    padding: 12,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  topAnimalIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  topAnimalInfo: {
+    flex: 1,
+  },
+  topAnimalName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  topAnimalDistance: {
+    fontSize: 12,
+    color: '#666',
+  },
+  loadingText: {
+    fontSize: 13,
+    color: '#999',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  noAnimalsText: {
+    fontSize: 13,
+    color: '#999',
+    textAlign: 'center',
+    paddingVertical: 8,
   },
   clusterPointsList: {
     marginTop: 12,
@@ -1727,6 +1883,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     marginBottom: 8,
+    padding: 12,
+    backgroundColor: '#FAFAFA',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
   },
   filterLabel: {
     fontSize: 14,
@@ -1738,12 +1899,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#fff',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E0E0E0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   dropdownButtonText: {
     fontSize: 16,
