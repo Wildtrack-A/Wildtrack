@@ -74,12 +74,50 @@ function MenuContent({ onClose, onSearchClick }: { onClose: () => void; onSearch
   );
 }
 
-function AnimalSearchModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function AnimalSearchModal({ visible, onClose, initialAnimalName }: { visible: boolean; onClose: () => void; initialAnimalName?: string }) {
   const [animalName, setAnimalName] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AnimalSearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const screenWidth = Dimensions.get('window').width;
+
+  const handleSearchWithName = async (name: string) => {
+    if (!name.trim()) {
+      setError('Please enter an animal name');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const data = await searchAnimal(name.trim());
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message || 'Failed to search for animal information');
+      console.error('Animal search error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-search when modal opens with initialAnimalName
+  useEffect(() => {
+    if (visible && initialAnimalName && initialAnimalName.trim()) {
+      setAnimalName(initialAnimalName);
+      // Auto-trigger search after a brief delay to ensure modal is rendered
+      const timer = setTimeout(() => {
+        handleSearchWithName(initialAnimalName);
+      }, 300);
+      return () => clearTimeout(timer);
+    } else if (visible && !initialAnimalName) {
+      // Reset when opening without initial name
+      setAnimalName('');
+      setResult(null);
+      setError(null);
+    }
+  }, [visible, initialAnimalName]);
 
   // Helper function to get habitat color
   const getHabitatColor = (habitat: string): string => {
@@ -123,24 +161,7 @@ function AnimalSearchModal({ visible, onClose }: { visible: boolean; onClose: ()
   };
 
   const handleSearch = async () => {
-    if (!animalName.trim()) {
-      setError('Please enter an animal name');
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setResult(null);
-
-    try {
-      const data = await searchAnimal(animalName.trim());
-      setResult(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to search for animal information');
-      console.error('Animal search error:', err);
-    } finally {
-      setLoading(false);
-    }
+    await handleSearchWithName(animalName);
   };
 
   const handleClose = () => {
@@ -559,7 +580,8 @@ function MenuButton() {
       {/* Animal Search Modal - rendered at MenuButton level so it persists */}
       <AnimalSearchModal 
         visible={showSearchModal} 
-        onClose={() => setShowSearchModal(false)} 
+        onClose={() => setShowSearchModal(false)}
+        initialAnimalName={undefined}
       />
     </>
   );
