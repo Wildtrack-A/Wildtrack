@@ -5,7 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from app.api.v1 import ingest, journals, auth, reddit_sightings, zones, image_verification  
+from app.api.v1 import ingest, journals, reddit_sightings, zones, image_verification, auth  
 
 app = FastAPI(
     title="WildTrack Server",

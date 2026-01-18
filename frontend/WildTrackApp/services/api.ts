@@ -8,68 +8,26 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSessionToken } from './supabase';
 
 // For Expo Go on physical device, use your computer's IP address instead of localhost
 // NOTE: Update this IP address if your computer's IP changes!
 // To find your IP: Windows: ipconfig, Mac/Linux: ifconfig
 const API_BASE_URL = __DEV__ 
-  ? 'http://169.233.131.171:8000/api/v1'  // Your computer's IP for Expo Go on physical device
+  ? 'http://169.233.183.248:8000/api/v1'  // Your computer's IP for Expo Go on physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
 
-// Token storage key
-const AUTH_TOKEN_KEY = '@wildtrack:auth_token';
-
 /**
- * Get the Auth0 token from storage
- * This will be set by your Auth0 integration
- */
-export async function getAuthToken(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(AUTH_TOKEN_KEY);
-  } catch (error) {
-    console.error('Error getting auth token:', error);
-    return null;
-  }
-}
-
-/**
- * Set the Auth0 token in storage
- * Call this after successful Auth0 login
- */
-export async function setAuthToken(token: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
-  } catch (error) {
-    console.error('Error setting auth token:', error);
-  }
-}
-
-/**
- * Remove the Auth0 token from storage
- * Call this on logout
- */
-export async function removeAuthToken(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
-  } catch (error) {
-    console.error('Error removing auth token:', error);
-  }
-}
-
-/**
- * Get headers with authentication token
+ * Get headers for API requests with authentication token
  */
 async function getAuthHeaders(): Promise<HeadersInit> {
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
   };
   
-  const token = await getAuthToken();
+  const token = await getSessionToken();
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
-  } else {
-    console.warn('⚠️ No auth token found. API requests may fail with 401 Unauthorized.');
-    console.warn('💡 Please log in first to get an authentication token.');
   }
   
   return headers;
@@ -93,20 +51,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
         // If that also fails, use the status code message
         errorMessage = `HTTP ${response.status}: ${response.statusText}`;
       }
-    }
-    
-    // Check if it's an invalid audience error - clear the token automatically
-    if (response.status === 401 && errorMessage.toLowerCase().includes('audience')) {
-      console.warn('⚠️ Invalid audience detected - clearing stored token');
-      await removeAuthToken();
-      
-      // Create a more helpful error
-      const helpfulError = new Error(
-        'Your session token is outdated. Please sign out and sign in again to get a new token with the correct audience.'
-      );
-      (helpfulError as any).shouldSignOut = true;
-      (helpfulError as any).originalError = errorMessage;
-      throw helpfulError;
     }
     
     const error = new Error(errorMessage);
@@ -163,98 +107,7 @@ export const journalAPI = {
   },
 };
 
-// Auth API calls
-export const authAPI = {
-  // Get current user info
-  async getCurrentUser() {
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${API_BASE_URL}/auth/me`, {
-      headers,
-    });
-    return handleResponse(response);
-  },
-
-  // Sync Auth0 user profile to backend
-  // role: optional role to set for new profiles ('field_researcher' or 'public')
-  async syncProfile(role?: 'field_researcher' | 'public') {
-    try {
-      const headers = await getAuthHeaders();
-      const body: any = {};
-      if (role) {
-        body.role = role;
-      }
-      
-      console.log('🔄 Syncing profile with role:', role || 'none');
-      console.log('📡 API URL:', `${API_BASE_URL}/auth/sync-profile`);
-      
-      // Create an AbortController for timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
-      try {
-        // Always send a body (even if empty) for POST requests
-        const response = await fetch(`${API_BASE_URL}/auth/sync-profile`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-        
-        clearTimeout(timeoutId);
-        console.log('📥 Sync response status:', response.status, response.statusText);
-        
-        return handleResponse(response);
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
-        
-        // Handle timeout specifically
-        if (fetchError.name === 'AbortError') {
-          throw new Error(
-            `Network request timed out. Make sure:\n` +
-            `1. Backend server is running on ${API_BASE_URL.replace('/api/v1', '')}\n` +
-            `2. Backend is accessible from your device/emulator\n` +
-            `3. Firewall allows connections on port 8000`
-          );
-        }
-        
-        // Handle other network errors
-        if (fetchError.message && fetchError.message.includes('Network request failed')) {
-          throw new Error(
-            `Cannot connect to backend at ${API_BASE_URL.replace('/api/v1', '')}.\n` +
-            `Make sure:\n` +
-            `1. Backend server is running\n` +
-            `2. Correct IP address in services/api.ts (currently: ${API_BASE_URL.replace('/api/v1', '')})\n` +
-            `3. Device and computer are on the same network`
-          );
-        }
-        
-        throw fetchError;
-      }
-    } catch (error: any) {
-      console.error('❌ Sync profile error details:', {
-        message: error.message,
-        url: `${API_BASE_URL}/auth/sync-profile`,
-        role,
-      });
-      throw error;
-    }
-  },
-};
-
-// Helper function to sync user profile (convenience wrapper)
-// role: optional role to set for new profiles ('field_researcher' or 'public')
-export async function syncUserProfile(role?: 'field_researcher' | 'public') {
-  try {
-    const result = await authAPI.syncProfile(role);
-    console.log('✅ Profile synced successfully:', result);
-    return result;
-  } catch (error: any) {
-    console.error('❌ Error syncing profile:', error);
-    // Re-throw with more context
-    const errorMessage = error?.message || 'Unknown error occurred';
-    throw new Error(`Profile sync failed: ${errorMessage}`);
-  }
-}
+// Auth API removed - no authentication required
 
 // Log API calls
 export const logAPI = {
@@ -499,25 +352,42 @@ export interface ZonesResponse {
 
 // Zones API calls (from zone-integration branch)
 export const zonesAPI = {
-  // Get all zones (returns different data based on user role)
-  // Falls back to public test endpoint if not authenticated
+  // Get all zones (with fallback to researcher endpoint to get GPS points)
   async getAllZones(): Promise<ZonesResponse> {
-    const token = await getAuthToken();
-
-    if (token) {
-      // User is logged in - use authenticated endpoint
+    try {
       const headers = await getAuthHeaders();
       const response = await fetch(`${API_BASE_URL}/zones/all`, {
         headers,
       });
+      
+      if (!response.ok) {
+        // If auth fails or any error, try researcher test endpoint to get GPS points
+        console.log('Main endpoint failed, trying researcher test endpoint to get GPS points');
+        const researcherResponse = await fetch(`${API_BASE_URL}/zones/all/test-researcher`, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (researcherResponse.ok) {
+          return handleResponse<ZonesResponse>(researcherResponse);
+        }
+        // If researcher endpoint also fails, throw original error
+        return handleResponse<ZonesResponse>(response);
+      }
+      
       return handleResponse<ZonesResponse>(response);
-    } else {
-      // Not logged in - use public test endpoint
-      console.log('No auth token, using public zones endpoint');
-      const response = await fetch(`${API_BASE_URL}/zones/all/test-public`, {
-        headers: { 'Content-Type': 'application/json' },
-      });
-      return handleResponse<ZonesResponse>(response);
+    } catch (error: any) {
+      // If request fails, try researcher endpoint as fallback to get GPS points
+      console.log('Request failed, trying researcher test endpoint as fallback');
+      try {
+        const researcherResponse = await fetch(`${API_BASE_URL}/zones/all/test-researcher`, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (researcherResponse.ok) {
+          return handleResponse<ZonesResponse>(researcherResponse);
+        }
+      } catch (fallbackError) {
+        console.error('Researcher endpoint also failed:', fallbackError);
+      }
+      throw error; // Throw original error if all fallbacks fail
     }
   },
 
@@ -547,5 +417,31 @@ export const zonesAPI = {
       headers,
     });
     return handleResponse(response);
+  },
+
+  // Get top 3 endangered species near user location (no auth required)
+  async getNearbyEndangeredSpecies(latitude: number, longitude: number, radiusKm: number = 50) {
+    const params = `?latitude=${latitude}&longitude=${longitude}&radius_km=${radiusKm}`;
+    const response = await fetch(`${API_BASE_URL}/zones/nearby-endangered${params}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    return handleResponse<{
+      user_location: { latitude: number; longitude: number };
+      radius_km: number;
+      top_species: Array<{
+        species: string;
+        sighting_count: number;
+        distance_km: number;
+      }>;
+    }>(response);
   },
 };

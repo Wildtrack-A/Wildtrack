@@ -1,223 +1,153 @@
-"""Authentication API endpoints using Auth0.
-
-Note: Registration and login are handled by Auth0's hosted pages.
-This module provides endpoints for managing user profiles and getting user info.
-"""
+"""Authentication API endpoints using Supabase Auth."""
 from fastapi import APIRouter, HTTPException, status, Depends, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
-from app.models.user import User, Token
+from app.models.user import User
 from app.auth import get_current_active_user
 from app.database import get_admin_supabase_client
 import logging
-import hashlib
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-class SyncProfileRequest(BaseModel):
-    role: Optional[str] = None  # Optional role: 'field_researcher' or 'public'
+class SignUpRequest(BaseModel):
+    email: EmailStr
+    password: str
+    username: Optional[str] = None
+    role: Optional[str] = "public"  # 'field_researcher' or 'public'
 
 
-def _generate_username_from_email(email: str, supabase, max_attempts: int = 100) -> str:
-    """
-    Generate a unique username from email address.
-    
-    Args:
-        email: User's email address
-        supabase: Supabase client instance
-        max_attempts: Maximum number of attempts to find unique username
-        
-    Returns:
-        Unique username string
-    """
-    if not email:
-        raise ValueError("Email is required to generate username")
-    
-    base_username = email.split("@")[0].lower()
-    # Remove invalid characters (keep alphanumeric, underscore, hyphen)
-    base_username = ''.join(c for c in base_username if c.isalnum() or c in ['_', '-'])
-    # Ensure username starts with alphanumeric
-    base_username = base_username.lstrip('_-') or 'user'
-    # Limit length
-    base_username = base_username[:20]
-    
-    username = base_username
-    for counter in range(1, max_attempts + 1):
-        try:
-            existing = supabase.table("profiles").select("id").eq("username", username).execute()
-            if not existing.data:
-                return username  # Username is available
-            username = f"{base_username}{counter}"
-        except Exception as e:
-            logger.warning(f"Error checking username '{username}': {e}")
-            # If check fails, try the username anyway and let database handle conflict
-            return username
-    
-    # Last resort: use hash of email
-    logger.warning(f"Could not find unique username after {max_attempts} attempts, using hash")
-    hash_suffix = hashlib.md5(email.encode()).hexdigest()[:8]
-    return f"{base_username[:12]}_{hash_suffix}"
+class SignInRequest(BaseModel):
+    email: EmailStr
+    password: str
 
 
-def _generate_username_from_user_id(user_id: str, supabase, max_attempts: int = 100) -> str:
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
+async def signup(request: SignUpRequest):
     """
-    Generate a unique username from Auth0 user ID.
-    
-    Args:
-        user_id: Auth0 user ID (e.g., "auth0|xxxxx" or "google-oauth2|xxxxx")
-        supabase: Supabase client instance
-        max_attempts: Maximum number of attempts to find unique username
-        
-    Returns:
-        Unique username string
+    Sign up a new user with Supabase Auth.
+    Creates user account and profile.
     """
-    # Extract meaningful part from user ID
-    user_id_parts = user_id.split("|")
-    if len(user_id_parts) > 1:
-        # Use the part after the pipe (provider user ID)
-        base_username = f"user_{user_id_parts[1][:8]}"
-    else:
-        # Use first 8 characters, removing invalid characters
-        clean_id = ''.join(c for c in user_id[:8] if c.isalnum() or c == '-')
-        base_username = f"user_{clean_id}" if clean_id else "user"
+    supabase = get_admin_supabase_client()
     
-    username = base_username
-    for counter in range(1, max_attempts + 1):
-        try:
-            existing = supabase.table("profiles").select("id").eq("username", username).execute()
-            if not existing.data:
-                return username  # Username is available
-            username = f"{base_username}{counter}"
-        except Exception as e:
-            logger.warning(f"Error checking username '{username}': {e}")
-            return username
-    
-    # Last resort: use hash of user ID
-    logger.warning(f"Could not find unique username after {max_attempts} attempts, using hash")
-    hash_suffix = hashlib.md5(user_id.encode()).hexdigest()[:8]
-    return f"user_{hash_suffix}"
-
-
-def _get_or_generate_username(
-    auth0_user_id: str, 
-    email: str, 
-    existing_username: Optional[str],
-    supabase
-) -> str:
-    """
-    Get existing username or generate a new unique one.
-    
-    Args:
-        auth0_user_id: Auth0 user ID
-        email: User's email address
-        existing_username: Existing username if profile already exists
-        supabase: Supabase client instance
-        
-    Returns:
-        Username string
-    """
-    # If profile exists, use existing username
-    if existing_username:
-        return existing_username
-    
-    # Generate new username
     try:
-        if email:
-            return _generate_username_from_email(email, supabase)
-        else:
-            return _generate_username_from_user_id(auth0_user_id, supabase)
-    except Exception as e:
-        logger.error(f"Error generating username: {e}", exc_info=True)
-        # Fallback to hash-based username
-        hash_suffix = hashlib.md5(auth0_user_id.encode()).hexdigest()[:8]
-        return f"user_{hash_suffix}"
-
-
-def _create_profile(
-    auth0_user_id: str,
-    username: str,
-    role: str,
-    supabase
-) -> dict:
-    """
-    Create user profile using RPC function or direct insert.
-    
-    Args:
-        auth0_user_id: Auth0 user ID
-        username: Unique username
-        role: User role
-        supabase: Supabase client instance
+        # Create user in Supabase Auth
+        auth_response = supabase.auth.admin.create_user({
+            "email": request.email,
+            "password": request.password,
+            "email_confirm": True  # Auto-confirm email for simplicity
+        })
         
-    Returns:
-        Created profile data
-    """
-    # Try RPC function first (preferred method)
-    try:
-        rpc_result = supabase.rpc('create_user_profile', {
-            'p_id': auth0_user_id,
-            'p_username': username,
-            'p_role': role,
-            'p_full_name': None
-        }).execute()
+        if not auth_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create user account"
+            )
         
-        # If RPC succeeds, fetch the profile
-        profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
-        if profile_response.data:
-            return profile_response.data[0]
+        user_id = auth_response.user.id
+        
+        # Generate username if not provided
+        username = request.username
+        if not username:
+            # Use email prefix as username
+            username = request.email.split("@")[0].lower()
+            # Make it unique by appending user_id suffix
+            username = f"{username}_{user_id[:8]}"
+        
+        # Create profile in profiles table
+        try:
+            profile_response = supabase.table("profiles").insert({
+                "id": user_id,
+                "username": username,
+                "role": request.role or "public"
+            }).execute()
             
-    except Exception as rpc_error:
-        logger.warning(f"RPC create_user_profile failed: {rpc_error}, trying direct insert")
+            if not profile_response.data:
+                logger.warning(f"Profile creation failed for user {user_id}, but user was created")
+        except Exception as e:
+            logger.error(f"Error creating profile for user {user_id}: {e}")
+            # User is created but profile failed - this is okay, they can update it later
         
-        # Fallback to direct insert
-        error_str = str(rpc_error).lower()
-        if 'username' in error_str and ('already exists' in error_str or 'duplicate' in error_str):
-            # Username conflict - this shouldn't happen if we checked, but handle it
+        return {
+            "message": "User created successfully",
+            "user_id": user_id,
+            "email": request.email
+        }
+        
+    except Exception as e:
+        error_str = str(e).lower()
+        if "user already registered" in error_str or "already exists" in error_str:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Username '{username}' is already taken. Please try again."
+                detail="An account with this email already exists"
             )
-    
-    # If RPC didn't return data, try direct insert
-    try:
-        insert_result = supabase.table("profiles").insert({
-            "id": auth0_user_id,
-            "username": username,
-            "role": role
-        }).execute()
-        
-        if not insert_result.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Profile creation completed but no data returned"
-            )
-        
-        return insert_result.data[0]
-        
-    except HTTPException:
-        raise
-    except Exception as insert_error:
-        error_str = str(insert_error).lower()
-        if 'username' in error_str and ('unique' in error_str or 'duplicate' in error_str):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Username '{username}' is already taken. Please try again."
-            )
-        logger.error(f"Direct insert failed: {insert_error}", exc_info=True)
+        logger.error(f"Error during signup: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create profile: {str(insert_error)}"
+            detail=f"Failed to create account: {str(e)}"
+        )
+
+
+@router.post("/signin", status_code=status.HTTP_200_OK)
+async def signin(request: SignInRequest):
+    """
+    Sign in a user with Supabase Auth.
+    Returns access token and user info.
+    """
+    supabase = get_admin_supabase_client()
+    
+    try:
+        # Sign in user
+        auth_response = supabase.auth.sign_in_with_password({
+            "email": request.email,
+            "password": request.password
+        })
+        
+        if not auth_response.user or not auth_response.session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        
+        # Get user profile
+        user_id = auth_response.user.id
+        profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        profile_data = profile_response.data[0] if profile_response.data else {}
+        
+        return {
+            "access_token": auth_response.session.access_token,
+            "refresh_token": auth_response.session.refresh_token,
+            "user": {
+                "id": user_id,
+                "email": auth_response.user.email,
+                "username": profile_data.get("username", ""),
+                "full_name": profile_data.get("full_name"),
+                "role": profile_data.get("role", "public")
+            }
+        }
+        
+    except Exception as e:
+        error_str = str(e).lower()
+        if "invalid" in error_str and ("password" in error_str or "credentials" in error_str):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        logger.error(f"Error during signin: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sign in: {str(e)}"
         )
 
 
 @router.get("/me", response_model=User)
 async def get_current_user_info(current_user: dict = Depends(get_current_active_user)):
     """
-    Get current authenticated user's information from profile.
+    Get current authenticated user's information.
     
-    Requires valid Auth0 JWT token in Authorization header.
+    Requires valid Supabase JWT token in Authorization header.
     """
     return User(
         id=current_user["id"],
@@ -229,79 +159,3 @@ async def get_current_user_info(current_user: dict = Depends(get_current_active_
         created_at=None,
         updated_at=None
     )
-
-
-@router.post("/sync-profile", response_model=User)
-async def sync_profile(
-    request_body: SyncProfileRequest = Body(default=SyncProfileRequest()),
-    current_user: dict = Depends(get_current_active_user)
-):
-    """
-    Sync Auth0 user data to profiles table.
-    
-    This creates or updates the profile entry for the authenticated Auth0 user.
-    Call this after first login to create the profile entry.
-    
-    Optional request body:
-    - role: 'field_researcher' or 'public' (defaults to 'public' if not provided)
-    """
-    supabase = get_admin_supabase_client()
-    auth0_user_id = current_user["id"]
-    email = current_user.get("email", "")
-    
-    # Validate and determine role
-    valid_roles = ['field_researcher', 'public', 'admin']
-    requested_role = 'public'  # Default
-    if request_body and request_body.role:
-        if request_body.role in valid_roles:
-            requested_role = request_body.role
-        else:
-            logger.warning(f"Invalid role requested: {request_body.role}, using default 'public'")
-    
-    try:
-        # Check if profile exists
-        profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
-        profile = profile_response.data[0] if profile_response.data else None
-        
-        # Get or generate username
-        existing_username = profile.get("username") if profile else None
-        username = _get_or_generate_username(auth0_user_id, email, existing_username, supabase)
-        
-        # Create profile if it doesn't exist
-        if not profile:
-            logger.info(f"Creating new profile for user {auth0_user_id}")
-            profile_data = _create_profile(auth0_user_id, username, requested_role, supabase)
-        else:
-            # Profile exists, just return it
-            logger.debug(f"Profile already exists for user {auth0_user_id}")
-            profile_data = profile
-        
-        # Fetch the profile to ensure we have the latest data
-        profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
-        if not profile_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Profile not found after sync operation"
-            )
-        
-        profile_data = profile_response.data[0]
-        
-        return User(
-            id=auth0_user_id,
-            email=email,
-            username=profile_data.get("username", username),
-            full_name=profile_data.get("full_name"),
-            role=profile_data.get("role", "public"),
-            is_active=True,
-            created_at=None,
-            updated_at=None
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error syncing profile for user {auth0_user_id}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error syncing profile: {str(e)}"
-        )

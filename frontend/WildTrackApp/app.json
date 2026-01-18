@@ -31,6 +31,10 @@
     },
     "plugins": [
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "supabaseUrl": "https://ezxtoukmvojfimeihzfq.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6eHRvdWttdm9qZmltZWloemZxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MTU1NjksImV4cCI6MjA4NDE5MTU2OX0.MshAW5_dC6t2_BrTP77mtcIlqTmbTdj3kxPF_5GyVMM"
+    }
   }
 }

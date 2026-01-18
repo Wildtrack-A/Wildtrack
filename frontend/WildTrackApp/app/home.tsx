@@ -58,6 +58,8 @@ export default function Home() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [imageVerified, setImageVerified] = useState<boolean | null>(null); // null = not checked, true = verified, false = fake
+  const [verifyingImage, setVerifyingImage] = useState(false);
   
   // Edit log state
   const [editSpecies, setEditSpecies] = useState('');
@@ -85,34 +87,38 @@ export default function Home() {
     };
   };
 
-  // Load journals from backend
+  // Load journals from backend with timeout
   const loadJournals = async () => {
     try {
       setLoading(true);
-      const backendJournals = await journalAPI.getAllJournals();
+      
+      // Add timeout to prevent infinite loading
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Request timeout: Backend may be unavailable')), 10000); // 10 second timeout
+      });
+      
+      const journalsPromise = journalAPI.getAllJournals();
+      const backendJournals = await Promise.race([journalsPromise, timeoutPromise]) as any[];
+      
       const convertedJournals = backendJournals.map(convertBackendToFrontend);
       setJournals(convertedJournals);
+      console.log('✅ Successfully loaded journals:', convertedJournals.length);
     } catch (error: any) {
-      console.error('Error loading journals:', error);
+      console.error('❌ Error loading journals:', error);
       
-      // Check if it's an audience error that requires re-authentication
-      if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
-        Alert.alert(
-          'Session Expired',
-          'Your session token is outdated. Please sign in again to continue.',
-          [
-            {
-              text: 'Sign In',
-              onPress: () => {
-                // Navigate to login screen
-                router.replace('/login');
-              }
-            }
-          ]
-        );
-      } else {
-        Alert.alert('Error', `Failed to load journals: ${error.message}`);
-      }
+      // Show user-friendly error message
+      const errorMessage = error.message || 'Unknown error';
+      Alert.alert(
+        'Failed to Load Journals',
+        `${errorMessage}\n\nPlease check:\n• Backend server is running\n• You're connected to the network\n• Backend URL is correct`,
+        [
+          { text: 'Retry', onPress: () => loadJournals() },
+          { text: 'Continue Offline', onPress: () => setLoading(false) }
+        ]
+      );
+      
+      // Set empty journals array so user can still use the app
+      setJournals([]);
     } finally {
       setLoading(false);
     }
@@ -187,6 +193,44 @@ export default function Home() {
 
     if (!result.canceled && result.assets[0]) {
       setPhotoUri(result.assets[0].uri);
+      setImageVerified(null); // Reset verification status when new image is uploaded
+    }
+  };
+
+  const analyzeImageWithAI = async () => {
+    if (!photoUri) {
+      Alert.alert('Error', 'No image to analyze');
+      return;
+    }
+
+    setVerifyingImage(true);
+    try {
+      const verification = await imageVerificationAPI.verifyImage(photoUri);
+      setImageVerified(verification.is_real);
+      
+      if (verification.is_real) {
+        Alert.alert(
+          'Image Verified',
+          `Image is verified as real (confidence: ${(verification.confidence * 100).toFixed(1)}%)`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert(
+          'Image Not Verified',
+          `This image appears to be AI-generated or fake (confidence: ${(verification.confidence * 100).toFixed(1)}%). Please upload a real image.`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error: any) {
+      console.error('Error verifying image:', error);
+      Alert.alert(
+        'Verification Error',
+        'Could not verify image. Please try again.',
+        [{ text: 'OK' }]
+      );
+      setImageVerified(null);
+    } finally {
+      setVerifyingImage(false);
     }
   };
 
@@ -278,19 +322,22 @@ export default function Home() {
       return;
     }
 
-    // Verify image if one was uploaded
+    // Check if image needs to be verified
     if (photoUri) {
-      try {
-        const verification = await imageVerificationAPI.verifyImage(photoUri);
-        if (!verification.is_real) {
-          Alert.alert('Invalid Image', 'Please upload real images');
-          return;
-        }
-      } catch (error: any) {
-        console.error('Error verifying image:', error);
-        // If verification fails, we'll still allow the image (fail open)
-        // You can change this to fail closed if preferred
-        Alert.alert('Verification Error', 'Could not verify image. Please try again.');
+      if (imageVerified === null) {
+        Alert.alert(
+          'Image Not Analyzed',
+          'Please analyze the image with AI before saving the log.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      if (imageVerified === false) {
+        Alert.alert(
+          'Invalid Image',
+          'The image was detected as fake or AI-generated. Please upload a real image.',
+          [{ text: 'OK' }]
+        );
         return;
       }
     }
@@ -337,6 +384,7 @@ export default function Home() {
       setDescription('');
       setPhotoUri(null);
       setCurrentLocation(null);
+      setImageVerified(null);
       setShowLogModal(false);
       Alert.alert('Success', 'Log entry saved!');
     } catch (error: any) {
@@ -582,6 +630,8 @@ export default function Home() {
       <View style={[styles.container, styles.loadingContainer]}>
         <ActivityIndicator size="large" color="#007AFF" />
         <Text style={styles.loadingText}>Loading journals...</Text>
+        <Text style={styles.loadingSubtext}>This should only take a few seconds</Text>
+        <Text style={styles.loadingSubtext}>If this takes too long, check your backend connection</Text>
       </View>
     );
   }
@@ -794,6 +844,42 @@ export default function Home() {
                     )}
                   </TouchableOpacity>
 
+                  {/* Analyze with AI Button - only show if image is uploaded */}
+                  {photoUri && (
+                    <TouchableOpacity
+                      style={[
+                        styles.analyzeButton,
+                        imageVerified === true && styles.analyzeButtonVerified,
+                        imageVerified === false && styles.analyzeButtonFailed,
+                        verifyingImage && styles.analyzeButtonLoading
+                      ]}
+                      onPress={analyzeImageWithAI}
+                      disabled={verifyingImage}
+                    >
+                      {verifyingImage ? (
+                        <>
+                          <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                          <Text style={styles.analyzeButtonText}>Analyzing...</Text>
+                        </>
+                      ) : imageVerified === true ? (
+                        <>
+                          <Ionicons name="checkmark-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
+                          <Text style={styles.analyzeButtonText}>Image Verified ✓</Text>
+                        </>
+                      ) : imageVerified === false ? (
+                        <>
+                          <Ionicons name="close-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
+                          <Text style={styles.analyzeButtonText}>Image Not Verified - Retry</Text>
+                        </>
+                      ) : (
+                        <>
+                          <Ionicons name="sparkles" size={20} color="#fff" style={{ marginRight: 8 }} />
+                          <Text style={styles.analyzeButtonText}>Analyze with AI</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  )}
+
                   {/* FIELD 1: Species Name */}
                   <View style={styles.inputContainer}>
                     <Ionicons name="paw-outline" size={20} color="#666" style={styles.inputIcon} />
@@ -931,6 +1017,10 @@ export default function Home() {
                   contentContainerStyle={styles.logDetailScrollContent}
                   showsVerticalScrollIndicator={true}
                   bounces={true}
+                  scrollEnabled={true}
+                  nestedScrollEnabled={true}
+                  alwaysBounceVertical={true}
+                  keyboardShouldPersistTaps="handled"
                 >
                   {/* Image */}
                   {selectedLog?.photoUri && (
@@ -1077,6 +1167,14 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     color: '#666',
+    fontWeight: '600',
+  },
+  loadingSubtext: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    paddingHorizontal: 40,
   },
   scrollView: {
     flex: 1,
@@ -1273,10 +1371,10 @@ const styles = StyleSheet.create({
   },
   logDetailScrollView: {
     flex: 1,
+    height: 0, // Force bounded height for ScrollView
   },
   logDetailScrollContent: {
     paddingBottom: 20,
-    flexGrow: 1,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1345,6 +1443,37 @@ const styles = StyleSheet.create({
   photoPlaceholderText: {
     marginTop: 8,
     color: '#007AFF',
+    fontWeight: '600',
+  },
+  analyzeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 16,
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  analyzeButtonVerified: {
+    backgroundColor: '#34C759',
+    shadowColor: '#34C759',
+  },
+  analyzeButtonFailed: {
+    backgroundColor: '#FF3B30',
+    shadowColor: '#FF3B30',
+  },
+  analyzeButtonLoading: {
+    opacity: 0.7,
+  },
+  analyzeButtonText: {
+    color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
   },
   inputContainer: {
