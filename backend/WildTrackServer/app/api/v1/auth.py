@@ -9,12 +9,207 @@ from typing import Optional
 from app.models.user import User, Token
 from app.auth import get_current_active_user
 from app.database import get_admin_supabase_client
+import logging
+import hashlib
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
 class SyncProfileRequest(BaseModel):
     role: Optional[str] = None  # Optional role: 'field_researcher' or 'public'
+
+
+def _generate_username_from_email(email: str, supabase, max_attempts: int = 100) -> str:
+    """
+    Generate a unique username from email address.
+    
+    Args:
+        email: User's email address
+        supabase: Supabase client instance
+        max_attempts: Maximum number of attempts to find unique username
+        
+    Returns:
+        Unique username string
+    """
+    if not email:
+        raise ValueError("Email is required to generate username")
+    
+    base_username = email.split("@")[0].lower()
+    # Remove invalid characters (keep alphanumeric, underscore, hyphen)
+    base_username = ''.join(c for c in base_username if c.isalnum() or c in ['_', '-'])
+    # Ensure username starts with alphanumeric
+    base_username = base_username.lstrip('_-') or 'user'
+    # Limit length
+    base_username = base_username[:20]
+    
+    username = base_username
+    for counter in range(1, max_attempts + 1):
+        try:
+            existing = supabase.table("profiles").select("id").eq("username", username).execute()
+            if not existing.data:
+                return username  # Username is available
+            username = f"{base_username}{counter}"
+        except Exception as e:
+            logger.warning(f"Error checking username '{username}': {e}")
+            # If check fails, try the username anyway and let database handle conflict
+            return username
+    
+    # Last resort: use hash of email
+    logger.warning(f"Could not find unique username after {max_attempts} attempts, using hash")
+    hash_suffix = hashlib.md5(email.encode()).hexdigest()[:8]
+    return f"{base_username[:12]}_{hash_suffix}"
+
+
+def _generate_username_from_user_id(user_id: str, supabase, max_attempts: int = 100) -> str:
+    """
+    Generate a unique username from Auth0 user ID.
+    
+    Args:
+        user_id: Auth0 user ID (e.g., "auth0|xxxxx" or "google-oauth2|xxxxx")
+        supabase: Supabase client instance
+        max_attempts: Maximum number of attempts to find unique username
+        
+    Returns:
+        Unique username string
+    """
+    # Extract meaningful part from user ID
+    user_id_parts = user_id.split("|")
+    if len(user_id_parts) > 1:
+        # Use the part after the pipe (provider user ID)
+        base_username = f"user_{user_id_parts[1][:8]}"
+    else:
+        # Use first 8 characters, removing invalid characters
+        clean_id = ''.join(c for c in user_id[:8] if c.isalnum() or c == '-')
+        base_username = f"user_{clean_id}" if clean_id else "user"
+    
+    username = base_username
+    for counter in range(1, max_attempts + 1):
+        try:
+            existing = supabase.table("profiles").select("id").eq("username", username).execute()
+            if not existing.data:
+                return username  # Username is available
+            username = f"{base_username}{counter}"
+        except Exception as e:
+            logger.warning(f"Error checking username '{username}': {e}")
+            return username
+    
+    # Last resort: use hash of user ID
+    logger.warning(f"Could not find unique username after {max_attempts} attempts, using hash")
+    hash_suffix = hashlib.md5(user_id.encode()).hexdigest()[:8]
+    return f"user_{hash_suffix}"
+
+
+def _get_or_generate_username(
+    auth0_user_id: str, 
+    email: str, 
+    existing_username: Optional[str],
+    supabase
+) -> str:
+    """
+    Get existing username or generate a new unique one.
+    
+    Args:
+        auth0_user_id: Auth0 user ID
+        email: User's email address
+        existing_username: Existing username if profile already exists
+        supabase: Supabase client instance
+        
+    Returns:
+        Username string
+    """
+    # If profile exists, use existing username
+    if existing_username:
+        return existing_username
+    
+    # Generate new username
+    try:
+        if email:
+            return _generate_username_from_email(email, supabase)
+        else:
+            return _generate_username_from_user_id(auth0_user_id, supabase)
+    except Exception as e:
+        logger.error(f"Error generating username: {e}", exc_info=True)
+        # Fallback to hash-based username
+        hash_suffix = hashlib.md5(auth0_user_id.encode()).hexdigest()[:8]
+        return f"user_{hash_suffix}"
+
+
+def _create_profile(
+    auth0_user_id: str,
+    username: str,
+    role: str,
+    supabase
+) -> dict:
+    """
+    Create user profile using RPC function or direct insert.
+    
+    Args:
+        auth0_user_id: Auth0 user ID
+        username: Unique username
+        role: User role
+        supabase: Supabase client instance
+        
+    Returns:
+        Created profile data
+    """
+    # Try RPC function first (preferred method)
+    try:
+        rpc_result = supabase.rpc('create_user_profile', {
+            'p_id': auth0_user_id,
+            'p_username': username,
+            'p_role': role,
+            'p_full_name': None
+        }).execute()
+        
+        # If RPC succeeds, fetch the profile
+        profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
+        if profile_response.data:
+            return profile_response.data[0]
+            
+    except Exception as rpc_error:
+        logger.warning(f"RPC create_user_profile failed: {rpc_error}, trying direct insert")
+        
+        # Fallback to direct insert
+        error_str = str(rpc_error).lower()
+        if 'username' in error_str and ('already exists' in error_str or 'duplicate' in error_str):
+            # Username conflict - this shouldn't happen if we checked, but handle it
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Username '{username}' is already taken. Please try again."
+            )
+    
+    # If RPC didn't return data, try direct insert
+    try:
+        insert_result = supabase.table("profiles").insert({
+            "id": auth0_user_id,
+            "username": username,
+            "role": role
+        }).execute()
+        
+        if not insert_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Profile creation completed but no data returned"
+            )
+        
+        return insert_result.data[0]
+        
+    except HTTPException:
+        raise
+    except Exception as insert_error:
+        error_str = str(insert_error).lower()
+        if 'username' in error_str and ('unique' in error_str or 'duplicate' in error_str):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Username '{username}' is already taken. Please try again."
+            )
+        logger.error(f"Direct insert failed: {insert_error}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create profile: {str(insert_error)}"
+        )
 
 
 @router.get("/me", response_model=User)
@@ -50,159 +245,46 @@ async def sync_profile(
     Optional request body:
     - role: 'field_researcher' or 'public' (defaults to 'public' if not provided)
     """
-    try:
-        supabase = get_admin_supabase_client()
-        auth0_user_id = current_user["id"]
-        email = current_user.get("email", "")  # Email might not be in token
-        
-        # Check if profile exists
-        try:
-            profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
-            profile = profile_response.data[0] if profile_response.data else None
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to check existing profile: {str(e)}"
-            )
-        
-        # Determine role: use from request_body if provided, otherwise default to 'public'
-        # Only set role on profile creation (not update)
-        requested_role = 'public'  # Default
-        if request_body and request_body.role:
-            if request_body.role in ['field_researcher', 'public', 'admin']:
-                requested_role = request_body.role
-        
-        # If profile exists, use existing username
-        if profile:
-            username = profile.get("username", "")
+    supabase = get_admin_supabase_client()
+    auth0_user_id = current_user["id"]
+    email = current_user.get("email", "")
+    
+    # Validate and determine role
+    valid_roles = ['field_researcher', 'public', 'admin']
+    requested_role = 'public'  # Default
+    if request_body and request_body.role:
+        if request_body.role in valid_roles:
+            requested_role = request_body.role
         else:
-            # Generate a unique username
-            # First try to use email prefix if available
-            if email:
-                base_username = email.split("@")[0]
-            else:
-                # Use a sanitized version of the user ID
-                # For "google-oauth2|1110..." use the part after the pipe
-                user_id_parts = auth0_user_id.split("|")
-                if len(user_id_parts) > 1:
-                    base_username = f"user_{user_id_parts[1][:8]}"
-                else:
-                    base_username = f"user_{auth0_user_id[:8].replace('-', '')}"
-            
-            # Check if username exists and generate unique one if needed
-            username = base_username
-            counter = 1
-            while True:
-                try:
-                    # Check if username already exists
-                    existing = supabase.table("profiles").select("id").eq("username", username).execute()
-                    if not existing.data:
-                        break  # Username is available
-                    # Username exists, try with a number suffix
-                    username = f"{base_username}{counter}"
-                    counter += 1
-                    if counter > 1000:  # Safety limit
-                        # Last resort: use full user ID hash
-                        import hashlib
-                        username = f"user_{hashlib.md5(auth0_user_id.encode()).hexdigest()[:8]}"
-                        break
-                except Exception:
-                    # If check fails, try the username anyway and let database handle conflict
-                    break
+            logger.warning(f"Invalid role requested: {request_body.role}, using default 'public'")
+    
+    try:
+        # Check if profile exists
+        profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
+        profile = profile_response.data[0] if profile_response.data else None
         
+        # Get or generate username
+        existing_username = profile.get("username") if profile else None
+        username = _get_or_generate_username(auth0_user_id, email, existing_username, supabase)
+        
+        # Create profile if it doesn't exist
         if not profile:
-            # Create profile from Auth0 user data
-            # Use RPC function to create profile (bypasses RLS)
-            # The RPC function uses ON CONFLICT, so it will update if ID exists
-            try:
-                rpc_result = supabase.rpc('create_user_profile', {
-                    'p_id': auth0_user_id,
-                    'p_username': username,
-                    'p_role': requested_role,  # Use requested role or default to 'public'
-                    'p_full_name': None
-                }).execute()
-            except Exception as rpc_error:
-                # Fallback: direct insert with ON CONFLICT handling
-                # Check if it's a username conflict specifically
-                rpc_error_str = str(rpc_error).lower()
-                if ('username' in rpc_error_str and 'already exists' in rpc_error_str) or 'duplicate' in rpc_error_str:
-                    # Username conflict - try to find available username
-                    base_username = username
-                    counter = 1
-                    username_found = False
-                    for attempt in range(100):
-                        try:
-                            test_username = f"{base_username}{counter}" if counter > 1 else base_username
-                            # Try insert with new username
-                            insert_result = supabase.table("profiles").insert({
-                                "id": auth0_user_id,
-                                "username": test_username,
-                                "role": requested_role
-                            }).execute()
-                            username = test_username
-                            username_found = True
-                            break
-                        except Exception:
-                            counter += 1
-                            if counter > 100:
-                                # Use hashed username as last resort
-                                import hashlib
-                                username = f"user_{hashlib.md5(auth0_user_id.encode()).hexdigest()[:8]}"
-                                try:
-                                    insert_result = supabase.table("profiles").insert({
-                                        "id": auth0_user_id,
-                                        "username": username,
-                                        "role": requested_role
-                                    }).execute()
-                                    username_found = True
-                                except:
-                                    pass
-                                break
-                    
-                    if not username_found:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to create profile: Could not find available username after multiple attempts. RPC error: {str(rpc_error)}"
-                        )
-                else:
-                    # Other error - try direct insert
-                    try:
-                        insert_result = supabase.table("profiles").insert({
-                            "id": auth0_user_id,
-                            "username": username,
-                            "role": requested_role
-                        }).execute()
-                        
-                        # Verify the insert succeeded
-                        if not insert_result.data:
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="Profile insert completed but no data returned"
-                            )
-                    except HTTPException:
-                        raise
-                    except Exception as insert_error:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to create profile: RPC error: {str(rpc_error)}, Insert error: {str(insert_error)}"
-                        )
+            logger.info(f"Creating new profile for user {auth0_user_id}")
+            profile_data = _create_profile(auth0_user_id, username, requested_role, supabase)
+        else:
+            # Profile exists, just return it
+            logger.debug(f"Profile already exists for user {auth0_user_id}")
+            profile_data = profile
         
-        # Fetch the updated/created profile to return
-        try:
-            profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
-            if not profile_response.data:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Profile not found after sync operation"
-                )
-            profile_data = profile_response.data[0]
-        except HTTPException:
-            raise
-        except Exception as e:
+        # Fetch the profile to ensure we have the latest data
+        profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
+        if not profile_response.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to fetch profile after sync: {str(e)}"
+                detail="Profile not found after sync operation"
             )
+        
+        profile_data = profile_response.data[0]
         
         return User(
             id=auth0_user_id,
@@ -214,9 +296,11 @@ async def sync_profile(
             created_at=None,
             updated_at=None
         )
+        
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error syncing profile for user {auth0_user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error syncing profile: {str(e)}"
