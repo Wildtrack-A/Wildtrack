@@ -1,60 +1,100 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-// TODO: Import Auth0 token storage when Auth0 is integrated
-// import { setAuthToken } from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { loginWithAuth0 } from '../services/auth0';
+import { syncUserProfile } from '../services/api';
+
+const PENDING_ACCOUNT_TYPE_KEY = '@wildtrack:pending_account_type';
 
 export default function Login() {
   const router = useRouter();
   const [isLogin, setIsLogin] = useState(true);
-  const [loginUsername, setLoginUsername] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [signupUsername, setSignupUsername] = useState('');
-  const [signupPassword, setSignupPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [isFieldResearcher, setIsFieldResearcher] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [showSignupPassword, setShowSignupPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    // TODO: Implement Auth0 login logic here
-    // After successful Auth0 login, you should:
-    // 1. Get the Auth0 access token
-    // 2. Store it using: await setAuthToken(auth0Token);
-    // 3. Then navigate to home
-    
-    // Example (replace with actual Auth0 integration):
-    // const auth0Token = await auth0.login(loginUsername, loginPassword);
-    // await setAuthToken(auth0Token);
-    
-    console.log('Login:', { username: loginUsername, password: loginPassword });
-    router.push('/home');
+    try {
+      setLoading(true);
+      
+      // Use Auth0 Universal Login (redirects to browser) - explicitly show login screen
+      const token = await loginWithAuth0('login');
+      
+      if (token) {
+        // Sync user profile with backend
+        try {
+          await syncUserProfile();
+        } catch (error) {
+          console.warn('Profile sync failed, continuing anyway:', error);
+        }
+        
+        // Navigate to home
+        router.replace('/home');
+      } else {
+        Alert.alert('Login Failed', 'Could not complete authentication. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('Login error:', error);
+      Alert.alert('Login Error', error.message || 'An error occurred during login. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSignup = async () => {
-    // TODO: Implement Auth0 signup logic here
-    // After successful Auth0 signup, you should:
-    // 1. Get the Auth0 access token
-    // 2. Store it using: await setAuthToken(auth0Token);
-    // 3. Then navigate to home
+    // Auth0 handles signup through Universal Login
+    // The login and signup both use the same Auth0 flow
+    // Auth0's Universal Login page has a "Sign Up" link
     
-    if (signupPassword !== confirmPassword) {
-      alert('Passwords do not match');
-      return;
+    try {
+      setLoading(true);
+      
+      // Store the account type selection before redirecting to Auth0
+      // This will be retrieved after successful Auth0 authentication
+      const accountRole = isFieldResearcher ? 'field_researcher' : 'public';
+      console.log('📝 Storing account type for signup:', accountRole);
+      await AsyncStorage.setItem(PENDING_ACCOUNT_TYPE_KEY, accountRole);
+      
+      // Use Auth0 Universal Login - explicitly show signup screen
+      const token = await loginWithAuth0('signup');
+      
+      if (token) {
+        // Retrieve the stored account type and sync profile
+        try {
+          const storedRole = await AsyncStorage.getItem(PENDING_ACCOUNT_TYPE_KEY);
+          const role = (storedRole === 'field_researcher' || storedRole === 'public') 
+            ? storedRole as 'field_researcher' | 'public' 
+            : undefined;
+          
+          console.log('📝 Retrieved account type from storage:', storedRole, '→ Using role:', role);
+          
+          // Clear the pending account type after use
+          await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY);
+          
+          // Sync user profile with the selected role
+          await syncUserProfile(role);
+        } catch (error) {
+          console.warn('Profile sync failed, continuing anyway:', error);
+          // Clear pending account type even if sync fails
+          await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY);
+        }
+        
+        // Navigate to home
+        router.replace('/home');
+      } else {
+        // Clear pending account type if login failed
+        await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY);
+        Alert.alert('Signup Failed', 'Could not complete registration. Please try again.');
+      }
+    } catch (error: any) {
+      // Clear pending account type on error
+      await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY);
+      console.error('Signup error:', error);
+      Alert.alert('Signup Error', error.message || 'An error occurred during signup. Please try again.');
+    } finally {
+      setLoading(false);
     }
-    
-    // Example (replace with actual Auth0 integration):
-    // const auth0Token = await auth0.signup(signupUsername, signupPassword, { isFieldResearcher });
-    // await setAuthToken(auth0Token);
-    
-    console.log('Signup:', { 
-      username: signupUsername, 
-      password: signupPassword,
-      isFieldResearcher: isFieldResearcher 
-    });
-    router.push('/home');
   };
 
   return (
@@ -96,109 +136,37 @@ export default function Login() {
         {/* Login Form */}
         {isLogin ? (
           <View style={styles.formContainer}>
-            <View style={styles.inputContainer}>
-              <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Username"
-                placeholderTextColor="#999"
-                value={loginUsername}
-                onChangeText={setLoginUsername}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+            {/* Auth0 Universal Login - no username/password needed */}
+            <View style={styles.infoBox}>
+              <Ionicons name="information-circle-outline" size={24} color="#007AFF" style={styles.infoIcon} />
+              <Text style={styles.infoText}>
+                Click the button below to securely sign in with Auth0. You'll be redirected to a secure login page.
+              </Text>
             </View>
 
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor="#999"
-                value={loginPassword}
-                onChangeText={setLoginPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TouchableOpacity
-                onPress={() => setShowPassword(!showPassword)}
-                style={styles.eyeIcon}
-              >
-                <Ionicons 
-                  name={showPassword ? "eye-outline" : "eye-off-outline"} 
-                  size={20} 
-                  color="#666" 
-                />
+            {loading ? (
+              <View style={[styles.primaryButton, styles.loadingButton]}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.primaryButtonText}>Authenticating...</Text>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.primaryButton} onPress={handleLogin} disabled={loading}>
+                <Text style={styles.primaryButtonText}>Continue with Auth0</Text>
               </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity style={styles.primaryButton} onPress={handleLogin}>
-              <Text style={styles.primaryButtonText}>Login</Text>
-            </TouchableOpacity>
+            )}
+            <Text style={styles.helperText}>
+              You'll be redirected to Auth0 to sign in securely
+            </Text>
           </View>
         ) : (
           /* Sign Up Form */
           <View style={styles.formContainer}>
-            <View style={styles.inputContainer}>
-              <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Choose a username"
-                placeholderTextColor="#999"
-                value={signupUsername}
-                onChangeText={setSignupUsername}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Create a password"
-                placeholderTextColor="#999"
-                value={signupPassword}
-                onChangeText={setSignupPassword}
-                secureTextEntry={!showSignupPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TouchableOpacity
-                onPress={() => setShowSignupPassword(!showSignupPassword)}
-                style={styles.eyeIcon}
-              >
-                <Ionicons 
-                  name={showSignupPassword ? "eye-outline" : "eye-off-outline"} 
-                  size={20} 
-                  color="#666" 
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Confirm password"
-                placeholderTextColor="#999"
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                secureTextEntry={!showConfirmPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TouchableOpacity
-                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                style={styles.eyeIcon}
-              >
-                <Ionicons 
-                  name={showConfirmPassword ? "eye-outline" : "eye-off-outline"} 
-                  size={20} 
-                  color="#666" 
-                />
-              </TouchableOpacity>
+            {/* Auth0 handles username/password - no form fields needed */}
+            <View style={styles.infoBox}>
+              <Ionicons name="information-circle-outline" size={24} color="#007AFF" style={styles.infoIcon} />
+              <Text style={styles.infoText}>
+                Select your account type below, then click "Continue with Auth0" to create your account. Auth0 will handle your email and password securely.
+              </Text>
             </View>
 
             {/* Account Type Selection */}
@@ -263,9 +231,19 @@ export default function Login() {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity style={styles.primaryButton} onPress={handleSignup}>
-              <Text style={styles.primaryButtonText}>Sign Up</Text>
-            </TouchableOpacity>
+            {loading ? (
+              <View style={[styles.primaryButton, styles.loadingButton]}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.primaryButtonText}>Authenticating...</Text>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.primaryButton} onPress={handleSignup} disabled={loading}>
+                <Text style={styles.primaryButtonText}>Continue with Auth0</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.helperText}>
+              You'll be redirected to Auth0 to create your account
+            </Text>
           </View>
         )}
       </ScrollView>
@@ -442,9 +420,40 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  loadingButton: {
+    flexDirection: 'row',
+    gap: 8,
+    opacity: 0.8,
+  },
   primaryButtonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: '600',
+  },
+  helperText: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 12,
+    paddingHorizontal: 20,
+  },
+  infoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E3F2FD',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#BBDEFB',
+  },
+  infoIcon: {
+    marginRight: 12,
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1565C0',
+    lineHeight: 20,
   },
 });
