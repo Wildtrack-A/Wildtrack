@@ -7,6 +7,8 @@ from app.database import get_admin_supabase_client
 INAT_BASE = "https://api.inaturalist.org/v1"
 DEFAULT_PER_PAGE = 100
 
+_taxon_cache = {}
+
 def _transform_inat_obs(inat: Dict) -> Dict:
     """Map iNaturalist observation JSON to our DB record shape."""
     lat, lon = None, None
@@ -22,6 +24,10 @@ def _transform_inat_obs(inat: Dict) -> Dict:
             lon, lat = coords[0], coords[1]
 
     first_photo = (inat.get("photos") or [None])[0]
+
+    taxon_id = (inat.get("taxon") or {}).get("id")
+    common_name = fetch_common_name(taxon_id)
+
     return {
         "inat_id": inat.get("id"),
         "observed_on": inat.get("observed_on"),
@@ -29,6 +35,7 @@ def _transform_inat_obs(inat: Dict) -> Dict:
         "species_guess": inat.get("species_guess"),
         "taxon_id": (inat.get("taxon") or {}).get("id"),
         "taxon_name": (inat.get("taxon") or {}).get("name") or (inat.get("taxon") or {}).get("preferred_common_name"),
+        "common_name": common_name,
         "latitude": lat,
         "longitude": lon,
         "user_id": (inat.get("user") or {}).get("id"),
@@ -40,6 +47,24 @@ def _transform_inat_obs(inat: Dict) -> Dict:
         "updated_at": inat.get("updated_at"),
         "source": "inaturalist"
     }
+
+def fetch_common_name(taxon_id: int, locale: str = "en", place_id: int = 1) -> Optional[str]:
+    """Fetch the preferred common name from iNaturalist for a given taxon_id."""
+    if not taxon_id:
+        return None
+    if taxon_id in _taxon_cache:
+        return _taxon_cache[taxon_id]
+    try:
+        url = f"https://api.inaturalist.org/v1/taxa/{taxon_id}"
+        resp = requests.get(url, params={"locale": locale, "preferred_place_id": place_id}, timeout=10)
+        resp.raise_for_status()
+        result = resp.json().get("results", [{}])[0]
+        common_name = result.get("vernacular_name") or result.get("preferred_common_name")
+        _taxon_cache[taxon_id] = common_name
+        return common_name
+    except Exception as e:
+        print(f"Error fetching common name for taxon {taxon_id}: {e}")
+        return None
 
 def fetch_inat_page(page: int = 1, per_page: int = DEFAULT_PER_PAGE, params: Optional[Dict] = None) -> Dict:
     params = params.copy() if params else {}

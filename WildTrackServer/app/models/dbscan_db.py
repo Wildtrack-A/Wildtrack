@@ -16,61 +16,78 @@ from app.database import get_admin_supabase_client
 from visual import visualize_points, visualize_boundaries, visualize_dbscan_no_centers, visualize_boundaries_only_clean
 
 def load_from_supabase(species_filter=None, limit=None):
-    """
-    Load observation data from Supabase inaturalist_observations table.
-
-    Args:
-        species_filter: Optional species name to filter by
-        limit: Optional limit on number of records to fetch
-
-    Returns:
-        gps_data: List of [lat, lon] coordinates
-        species_list: List of species names
-        timestamps: List of observation timestamps
-    """
     supabase = get_admin_supabase_client()
-
-    # Build query - only fetch records with valid coordinates and species
-    query = supabase.table("inaturalist_observations").select(
-        "latitude, longitude, taxon_name, species_guess, observed_on"
-    ).not_.is_("latitude", "null").not_.is_("longitude", "null")
-
-    # Apply species filter if provided
+    
+    all_data = []
+    page_size = 100 
+    offset = 0
+    
+    print("Starting to fetch data from Supabase...")
+    
+    count_query = supabase.table("observations").select("*", count='exact').not_.is_("latitude", "null").not_.is_("longitude", "null")
     if species_filter:
-        query = query.eq("taxon_name", species_filter)
-
-    # Apply limit if provided
+        count_query = count_query.eq("species", species_filter)
+    
+    count_response = count_query.execute()
+    total_count = count_response.count
+    print(f"Total records in database: {total_count}")
+    
+    while offset < total_count:
+        # Build fresh query for each page
+        query = supabase.table("observations").select(
+            "latitude, longitude, species, timestamp"
+        ).not_.is_("latitude", "null").not_.is_("longitude", "null")
+        
+        if species_filter:
+            query = query.eq("species", species_filter)
+        
+        # Use offset and limit
+        response = query.order("timestamp").limit(page_size).offset(offset).execute()
+        
+        if not response.data or len(response.data) == 0:
+            print(f"No more data at offset {offset}")
+            break
+        
+        fetched_count = len(response.data)
+        all_data.extend(response.data)
+        
+        # Print progress every 10 pages
+        if (offset // page_size) % 10 == 0:
+            print(f"Progress: {len(all_data)}/{total_count} records ({(len(all_data)/total_count*100):.1f}%)")
+        
+        offset += fetched_count
+        
+        # Safety check
+        if len(all_data) >= total_count:
+            break
+    
+    print(f"Finished fetching {len(all_data)} records")
+    
     if limit:
-        query = query.limit(limit)
-
-    response = query.execute()
-
-    if not response.data:
-        print("No data found in inaturalist_observations table")
+        all_data = all_data[:limit]
+    
+    if not all_data:
+        print("No data found in observations table")
         return [], [], []
-
+    
     gps_data = []
     species_list = []
     timestamps = []
-
-    for record in response.data:
+    
+    for record in all_data:
         lat = record.get("latitude")
         lon = record.get("longitude")
-
-        # Skip records without valid coordinates
+        
         if lat is None or lon is None:
             continue
-
+        
         gps_data.append([lat, lon])
-
-        # Use taxon_name if available, fallback to species_guess
-        species = record.get("taxon_name") or record.get("species_guess") or "Unknown"
+        species = record.get("species") or "Unknown"
         species_list.append(species)
-
-        timestamps.append(record.get("observed_on"))
-
+        timestamps.append(record.get("timestamp"))
+    
     print(f"Loaded {len(gps_data)} data points from Supabase")
-
+    
     return gps_data, species_list, timestamps
 
 def create_geofence_zones_dbscan(gps_points, species_list, eps_km=100):

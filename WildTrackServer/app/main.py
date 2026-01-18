@@ -6,7 +6,6 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.api.v1 import ingest, auth
-from app.api.v1 import app_api_v1_inaturalist_Version2 as inaturalist
 
 app = FastAPI(
     title="WildTrack Server",
@@ -32,8 +31,6 @@ app.add_middleware(
 # Include routers (after limiter setup)
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["authentication"])
 app.include_router(ingest.router, prefix="/api/v1", tags=["ingestion"])
-app.include_router(inaturalist.router, prefix="/api/v1", tags=["iNaturalist"])
-
 
 @app.get("/")
 async def root():
