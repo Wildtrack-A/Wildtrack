@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { journalAPI, zoneAPI, ZonePoint, Zone } from '../services/api';
+import { journalAPI, zonesAPI, ZonePoint, Zone, ZonesResponse } from '../services/api';
 
 interface UserLog {
   id: string;
@@ -172,20 +172,8 @@ function MapScreen() {
     setLoadingZones(true);
     setError(null);
     try {
-      // Try authenticated endpoint first, fallback to test endpoint
-      let response: any;
-      try {
-        response = await zoneAPI.getAllZones();
-      } catch (authError) {
-        // If auth fails, use test endpoint
-        console.log('Auth failed, using test endpoint');
-        try {
-          response = await zoneAPI.getAllZonesResearcher(); // Use researcher view to get GPS points
-        } catch (testError) {
-          console.error('Test endpoint also failed:', testError);
-          throw new Error('Failed to load zone data. Make sure the backend is running and has data in the observations table.');
-        }
-      }
+      // zonesAPI.getAllZones() already handles auth fallback internally
+      const response = await zonesAPI.getAllZones();
       
       // Extract all individual GPS points from zones with species info
       const allPoints: (ZonePoint & { species?: string })[] = [];
