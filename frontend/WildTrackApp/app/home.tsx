@@ -176,16 +176,33 @@ export default function Home() {
       return;
     }
 
+    const journalName = newJournalName.trim();
+    setNewJournalName('');
+    setShowJournalModal(false);
+
+    // Optimistic UI update - show journal immediately
+    const tempId = `temp-${Date.now()}`;
+    const optimisticJournal: Journal = {
+      id: tempId,
+      name: journalName,
+      createdAt: new Date(),
+      logs: [],
+    };
+    setJournals(prev => [...prev, optimisticJournal]);
+
     try {
-      const backendJournal = await journalAPI.createJournal(newJournalName);
+      const backendJournal = await journalAPI.createJournal(journalName);
       const convertedJournal = convertBackendToFrontend(backendJournal);
-      setJournals([...journals, convertedJournal]);
-      setNewJournalName('');
-      setShowJournalModal(false);
-      Alert.alert('Success', 'Journal created!');
+      // Replace optimistic journal with real one using functional update
+      setJournals(prev => prev.map(j => j.id === tempId ? convertedJournal : j));
+      // Don't show alert - journal already visible
     } catch (error: any) {
+      // Remove optimistic journal on error using functional update
+      setJournals(prev => prev.filter(j => j.id !== tempId));
       Alert.alert('Error', `Failed to create journal: ${error.message}`);
       console.error('Error creating journal:', error);
+      setShowJournalModal(true); // Reopen modal so user can try again
+      setNewJournalName(journalName);
     }
   };
 
@@ -260,15 +277,31 @@ export default function Home() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            // Optimistic UI update - remove journal immediately
+            const deletedJournal = journals.find(j => j.id === journalId);
+            setJournals(prev => prev.filter(j => j.id !== journalId));
+            if (selectedJournalId === journalId) {
+              setSelectedJournalId(null);
+            }
+
             try {
               await journalAPI.deleteJournal(journalId);
-              setJournals(journals.filter(j => j.id !== journalId));
-              if (selectedJournalId === journalId) {
-                setSelectedJournalId(null);
-              }
-              Alert.alert('Success', 'Journal deleted');
+              // Success - journal already removed from UI, no alert needed
             } catch (error: any) {
-              Alert.alert('Error', `Failed to delete journal: ${error.message}`);
+              const errorMessage = error?.message || 'Unknown error';
+              // If journal not found, it's already deleted - don't revert
+              if (errorMessage.toLowerCase().includes('not found')) {
+                // Journal was already deleted - this is fine, keep it removed from UI
+                console.log('Journal already deleted, keeping UI state');
+                return;
+              }
+              // For other errors, revert - add journal back
+              if (deletedJournal) {
+                setJournals(prev => [...prev, deletedJournal].sort((a, b) => 
+                  b.createdAt.getTime() - a.createdAt.getTime()
+                ));
+              }
+              Alert.alert('Error', `Failed to delete journal: ${errorMessage}`);
               console.error('Error deleting journal:', error);
             }
           },
@@ -287,15 +320,30 @@ export default function Home() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            // Optimistic UI update - remove log immediately
+            let deletedLog: AnimalLog | null = null;
+            setJournals(prev => prev.map(journal => {
+              if (journal.id === journalId) {
+                deletedLog = journal.logs.find(log => log.id === logId) || null;
+                return { ...journal, logs: journal.logs.filter(log => log.id !== logId) };
+              }
+              return journal;
+            }));
+
             try {
               await logAPI.deleteLog(logId);
-              setJournals(journals.map(journal => 
-                journal.id === journalId
-                  ? { ...journal, logs: journal.logs.filter(log => log.id !== logId) }
-                  : journal
-              ));
-              Alert.alert('Success', 'Log deleted');
+              // Success - log already removed from UI, no alert needed
             } catch (error: any) {
+              // Revert on error - add log back
+              if (deletedLog) {
+                setJournals(prev => prev.map(journal => 
+                  journal.id === journalId
+                    ? { ...journal, logs: [...journal.logs, deletedLog!].sort((a, b) => 
+                        b.timestamp.getTime() - a.timestamp.getTime()
+                      ) }
+                    : journal
+                ));
+              }
               Alert.alert('Error', `Failed to delete log: ${error.message}`);
               console.error('Error deleting log:', error);
             }

@@ -3,12 +3,18 @@
 Note: Registration and login are handled by Auth0's hosted pages.
 This module provides endpoints for managing user profiles and getting user info.
 """
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Body
+from pydantic import BaseModel
+from typing import Optional
 from app.models.user import User, Token
 from app.auth import get_current_active_user
 from app.database import get_admin_supabase_client
 
 router = APIRouter()
+
+
+class SyncProfileRequest(BaseModel):
+    role: Optional[str] = None  # Optional role: 'field_researcher' or 'public'
 
 
 @router.get("/me", response_model=User)
@@ -30,13 +36,19 @@ async def get_current_user_info(current_user: dict = Depends(get_current_active_
     )
 
 
-@router.post("/sync-profile")
-async def sync_profile(current_user: dict = Depends(get_current_active_user)):
+@router.post("/sync-profile", response_model=User)
+async def sync_profile(
+    request_body: SyncProfileRequest = Body(default=SyncProfileRequest()),
+    current_user: dict = Depends(get_current_active_user)
+):
     """
     Sync Auth0 user data to profiles table.
     
     This creates or updates the profile entry for the authenticated Auth0 user.
     Call this after first login to create the profile entry.
+    
+    Optional request body:
+    - role: 'field_researcher' or 'public' (defaults to 'public' if not provided)
     """
     try:
         supabase = get_admin_supabase_client()
@@ -46,6 +58,13 @@ async def sync_profile(current_user: dict = Depends(get_current_active_user)):
         # Check if profile exists
         profile_response = supabase.table("profiles").select("*").eq("id", auth0_user_id).execute()
         profile = profile_response.data[0] if profile_response.data else None
+        
+        # Determine role: use from request_body if provided, otherwise default to 'public'
+        # Only set role on profile creation (not update)
+        requested_role = 'public'  # Default
+        if request_body and request_body.role:
+            if request_body.role in ['field_researcher', 'public', 'admin']:
+                requested_role = request_body.role
         
         if not profile:
             # Create profile from Auth0 user data
@@ -57,7 +76,7 @@ async def sync_profile(current_user: dict = Depends(get_current_active_user)):
                 supabase.rpc('create_user_profile', {
                     'p_id': auth0_user_id,
                     'p_username': username,
-                    'p_role': 'public',  # Default role
+                    'p_role': requested_role,  # Use requested role or default to 'public'
                     'p_full_name': None
                 }).execute()
             except Exception as rpc_error:
@@ -66,7 +85,7 @@ async def sync_profile(current_user: dict = Depends(get_current_active_user)):
                     supabase.table("profiles").insert({
                         "id": auth0_user_id,
                         "username": username,
-                        "role": "public"
+                        "role": requested_role
                     }).execute()
                 except Exception as insert_error:
                     raise HTTPException(
