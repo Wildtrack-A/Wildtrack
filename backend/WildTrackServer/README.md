@@ -18,6 +18,7 @@ This FastAPI backend serves as the data warehouse and spatial intelligence layer
 
 - Python 3.9+
 - Supabase account and project
+- Auth0 account (free tier: 7,000 free active users)
 - pip or poetry for dependency management
 
 ### Step 1: Supabase Setup
@@ -39,6 +40,10 @@ This FastAPI backend serves as the data warehouse and spatial intelligence layer
 5. **Set up Row Level Security**:
    - Run `sql/05_setup_rls_policies.sql` (public zones, protected observations)
 
+6. **Create profiles table** (for Auth0 users):
+   - Run `sql/07_create_users_table.sql` (user profiles linked to Auth0)
+   - Run `sql/08_create_profile_function.sql` (helper function for profile creation)
+
 ### Step 2: Environment Configuration
 
 1. Copy `.env.example` to `.env`:
@@ -51,13 +56,45 @@ This FastAPI backend serves as the data warehouse and spatial intelligence layer
    - Get `SUPABASE_KEY` (anon/public key)
    - Get `SUPABASE_SERVICE_KEY` (service_role key) for admin operations
 
-### Step 3: Install Dependencies
+3. Fill in your Auth0 credentials:
+   - Get `AUTH0_DOMAIN` from Auth0 Dashboard -> Settings (e.g., `your-app.us.auth0.com`)
+   - Get `AUTH0_API_AUDIENCE` from Auth0 Dashboard -> Applications -> APIs -> Your API -> Identifier
+
+### Step 3: Auth0 Setup
+
+1. **Create an Auth0 account** at https://auth0.com (free, no credit card required)
+
+2. **Create an API**:
+   - Go to Applications -> APIs
+   - Click "Create API"
+   - Name: `WildTrack API` (or any name)
+   - Identifier: `https://wildtrack-api` (or any unique identifier)
+   - Signing Algorithm: RS256
+   - Save the **Identifier** (this is your `AUTH0_API_AUDIENCE`)
+
+3. **Get your Auth0 Domain**:
+   - Go to Settings
+   - Copy your **Domain** (e.g., `your-app.us.auth0.com`)
+   - This is your `AUTH0_DOMAIN`
+
+4. **Configure Auth0** (optional but recommended):
+   - Enable **Social Login** (Google, GitHub, etc.) in Authentication -> Social
+   - Enable **Multi-Factor Authentication** in Authentication -> Multi-factor Auth
+   - Enable **Passwordless** login in Authentication -> Passwordless
+   - Customize the login page in Branding -> Universal Login
+
+5. **Configure frontend to use Auth0**:
+   - Your frontend should redirect users to Auth0's hosted login page
+   - After authentication, Auth0 redirects back with an access token
+   - Use this token in the `Authorization: Bearer <token>` header for API requests
+
+### Step 4: Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Run the Server
+### Step 5: Run the Server
 
 ```bash
 uvicorn app.main:app --reload
@@ -70,10 +107,35 @@ The API will be available at:
 
 ## API Endpoints
 
+### Authentication
+
+WildTrack uses **Auth0** for authentication. Users authenticate via Auth0's hosted login page, and the frontend receives a JWT access token that must be included in API requests.
+
+#### `GET /api/v1/auth/me`
+Get current authenticated user's information.
+
+**Headers:**
+- `Authorization: Bearer <auth0_token>`
+
+**Response:** User profile data
+
+#### `POST /api/v1/auth/sync-profile`
+Sync Auth0 user data to profiles table (creates profile if it doesn't exist).
+
+**Headers:**
+- `Authorization: Bearer <auth0_token>`
+
+**Response:** User profile data
+
 ### Day 1: Ingestion
 
 #### `POST /api/v1/ingest`
 Ingest a list of animal sightings (raw GPS pings).
+
+**Authentication Required:** Field Researcher or Admin role
+
+**Headers:**
+- `Authorization: Bearer <auth0_token>`
 
 **Request Body:**
 ```json
@@ -109,10 +171,14 @@ WildTrackServer/
 │   ├── database.py          # Supabase client setup
 │   ├── models/              # Pydantic models
 │   │   ├── observation.py
-│   │   └── zone.py
+│   │   ├── zone.py
+│   │   └── user.py
+│   ├── auth.py            # Auth0 authentication utilities
 │   └── api/
 │       └── v1/
-│           └── ingest.py    # Ingestion endpoint
+│           ├── auth.py      # Authentication endpoints
+│           ├── ingest.py    # Ingestion endpoint
+│           └── journals.py  # Journals endpoints
 ├── sql/                     # Database migration scripts
 │   ├── 01_enable_postgis.sql
 │   ├── 02_create_observations_table.sql
@@ -126,10 +192,17 @@ WildTrackServer/
 
 ## Security & Sustainability
 
+WildTrack uses **Auth0** for secure authentication with features like:
+- **Social Sign-In**: Enable Google, GitHub, Facebook, and more with one click
+- **Multi-Factor Authentication**: Protect accounts with MFA
+- **Passwordless Login**: Email magic links or SMS codes
+- **JWT Tokens**: Secure, stateless authentication for API access
+
 The Row Level Security (RLS) policies ensure:
 
 - **Public Safety**: Hikers can query zones via the public API key to stay safe
 - **Animal Protection**: Exact observation locations are protected (prevent poaching)
+- **Authenticated Access**: Auth0 JWT tokens required for protected endpoints
 - **Admin Access**: Service role key required for ingestion and admin operations
 
 This creates a "virtual fence" that protects wildlife while enabling safe recreation.

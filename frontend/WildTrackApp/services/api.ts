@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // For Expo Go on physical device, use your computer's IP address instead of localhost
 const API_BASE_URL = __DEV__ 
-  ? 'http://169.233.183.248:8001/api/v1'  // Your computer's IP for Expo Go on physical device
+  ? 'http://169.233.183.248:8000/api/v1'  // Your computer's IP for Expo Go on physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
 
 // Token storage key
@@ -137,6 +137,66 @@ export const journalAPI = {
     return handleResponse(response);
   },
 };
+
+// Auth API calls
+export const authAPI = {
+  // Get current user info
+  async getCurrentUser() {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/auth/me`, {
+      headers,
+    });
+    return handleResponse(response);
+  },
+
+  // Sync Auth0 user profile to backend
+  // role: optional role to set for new profiles ('field_researcher' or 'public')
+  async syncProfile(role?: 'field_researcher' | 'public') {
+    try {
+      const headers = await getAuthHeaders();
+      const body: any = {};
+      if (role) {
+        body.role = role;
+      }
+      
+      console.log('🔄 Syncing profile with role:', role || 'none');
+      console.log('📡 API URL:', `${API_BASE_URL}/auth/sync-profile`);
+      
+      // Always send a body (even if empty) for POST requests
+      const response = await fetch(`${API_BASE_URL}/auth/sync-profile`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      
+      console.log('📥 Sync response status:', response.status, response.statusText);
+      
+      return handleResponse(response);
+    } catch (error: any) {
+      console.error('❌ Sync profile error details:', {
+        message: error.message,
+        url: `${API_BASE_URL}/auth/sync-profile`,
+        role,
+      });
+      throw error;
+    }
+  },
+};
+
+// Helper function to sync user profile (convenience wrapper)
+// role: optional role to set for new profiles ('field_researcher' or 'public')
+export async function syncUserProfile(role?: 'field_researcher' | 'public') {
+  try {
+    const result = await authAPI.syncProfile(role);
+    console.log('✅ Profile synced successfully:', result);
+    return result;
+  } catch (error: any) {
+    console.error('❌ Error syncing profile:', error);
+    // Re-throw with more context
+    const errorMessage = error?.message || 'Unknown error occurred';
+    throw new Error(`Profile sync failed: ${errorMessage}`);
+  }
+}
 
 // Log API calls
 export const logAPI = {

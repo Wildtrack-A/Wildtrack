@@ -1,6 +1,6 @@
 """Journal and Log API endpoints for user journals and animal logs."""
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, HTTPException, status, Depends
 from app.models.journal import (
     Journal,
     JournalCreate,
@@ -10,21 +10,21 @@ from app.models.journal import (
     AnimalLogUpdate
 )
 from app.database import get_admin_supabase_client
-from app.auth import get_user_id_from_token
+from app.auth import get_current_user
 from datetime import datetime
 
 router = APIRouter()
 
 
 @router.get("/journals", response_model=List[Journal], status_code=status.HTTP_200_OK)
-async def get_journals(request: Request):
+async def get_journals(current_user: dict = Depends(get_current_user)):
     """
     Get all journals with their logs for the authenticated user.
     
     Returns a list of all journals belonging to the authenticated user, each containing its associated logs.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     supabase = get_admin_supabase_client()
     
@@ -81,14 +81,14 @@ async def get_journals(request: Request):
 
 
 @router.post("/journals", response_model=Journal, status_code=status.HTTP_201_CREATED)
-async def create_journal(request: Request, journal: JournalCreate):
+async def create_journal(journal: JournalCreate, current_user: dict = Depends(get_current_user)):
     """
     Create a new journal for the authenticated user.
     
     Creates a new journal with the provided name, automatically associated with the authenticated user.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     try:
         supabase = get_admin_supabase_client()
@@ -144,14 +144,14 @@ async def create_journal(request: Request, journal: JournalCreate):
 
 
 @router.put("/journals/{journal_id}", response_model=Journal, status_code=status.HTTP_200_OK)
-async def update_journal(request: Request, journal_id: str, journal_update: JournalUpdate):
+async def update_journal(journal_id: str, journal_update: JournalUpdate, current_user: dict = Depends(get_current_user)):
     """
     Update a journal.
     
     Updates the journal name. Only the journal owner can update it.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     supabase = get_admin_supabase_client()
     
@@ -227,14 +227,14 @@ async def update_journal(request: Request, journal_id: str, journal_update: Jour
 
 
 @router.delete("/journals/{journal_id}", status_code=status.HTTP_200_OK)
-async def delete_journal(request: Request, journal_id: str):
+async def delete_journal(journal_id: str, current_user: dict = Depends(get_current_user)):
     """
     Delete a journal and all its logs.
     
     This will cascade delete all logs associated with the journal. Only the journal owner can delete it.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     supabase = get_admin_supabase_client()
     
@@ -253,18 +253,13 @@ async def delete_journal(request: Request, journal_id: str):
                 detail="You don't have permission to delete this journal"
             )
         
-        # Delete logs first (CASCADE should handle this, but being explicit)
-        supabase.table("logs").delete().eq("journal_id", journal_id).execute()
-        
-        # Delete journal
+        # Delete journal - CASCADE delete will automatically delete associated logs
+        # This is faster than deleting logs first, then journal
+        # Note: Supabase DELETE may return empty data even on success
         response = supabase.table("journals").delete().eq("id", journal_id).eq("user_id", user_id).execute()
         
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Journal not found"
-            )
-        
+        # Supabase will raise an error if delete fails, so if we get here, it succeeded
+        # Even if response.data is empty, the deletion was successful
         return {"message": "Journal deleted successfully"}
         
     except HTTPException:
@@ -277,14 +272,14 @@ async def delete_journal(request: Request, journal_id: str):
 
 
 @router.post("/journals/{journal_id}/logs", response_model=AnimalLog, status_code=status.HTTP_201_CREATED)
-async def create_log(request: Request, journal_id: str, log: AnimalLogCreate):
+async def create_log(journal_id: str, log: AnimalLogCreate, current_user: dict = Depends(get_current_user)):
     """
     Create a new log entry in a journal.
     
     Creates a new animal log entry associated with the specified journal. Only the journal owner can add logs.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     supabase = get_admin_supabase_client()
     
@@ -351,14 +346,14 @@ async def create_log(request: Request, journal_id: str, log: AnimalLogCreate):
 
 
 @router.put("/logs/{log_id}", response_model=AnimalLog, status_code=status.HTTP_200_OK)
-async def update_log(request: Request, log_id: str, log_update: AnimalLogUpdate):
+async def update_log(log_id: str, log_update: AnimalLogUpdate, current_user: dict = Depends(get_current_user)):
     """
     Update a log entry.
     
     Updates the species, description, or photo_uri of a log entry. Only the log owner can update it.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     supabase = get_admin_supabase_client()
     
@@ -424,14 +419,14 @@ async def update_log(request: Request, log_id: str, log_update: AnimalLogUpdate)
 
 
 @router.delete("/logs/{log_id}", status_code=status.HTTP_200_OK)
-async def delete_log(request: Request, log_id: str):
+async def delete_log(log_id: str, current_user: dict = Depends(get_current_user)):
     """
     Delete a log entry.
     
     Permanently deletes the specified log entry. Only the log owner can delete it.
     """
-    # Extract user ID from Auth0 token
-    user_id = get_user_id_from_token(request)
+    # Extract user ID from current user
+    user_id = current_user["id"]
     
     supabase = get_admin_supabase_client()
     

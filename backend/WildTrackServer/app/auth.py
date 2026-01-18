@@ -1,126 +1,179 @@
-"""Auth0 authentication helpers and middleware."""
-from typing import Optional
-from fastapi import HTTPException, status, Request
+"""Authentication utilities using Auth0."""
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import jwt
-import os
+from jose import jwt, JWTError
+import base64
+import httpx
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+from app.database import get_admin_supabase_client
+from app.config import settings
 
-
-# Security scheme for Bearer token
+# HTTP Bearer token scheme
 security = HTTPBearer()
 
+# Cache for Auth0 JWKS
+_jwks_cache = None
 
-def get_user_id_from_token(request: Request) -> str:
-    """
-    Extract user ID from Auth0 JWT token.
-    
-    For proof of concept: If no auth token is provided, returns a default user ID.
-    This allows testing without Auth0 integration.
-    
-    Once Auth0 is integrated, remove the fallback and require authentication.
-    
-    Args:
-        request: FastAPI Request object
-        
-    Returns:
-        str: User ID from the token, or default user ID if no token provided
-    """
-    # Get authorization header
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        # PROOF OF CONCEPT: Return default user ID when no auth token
-        # Remove this in production once Auth0 is integrated!
-        return "default_user_for_poc"
-    
-    # Extract token
+
+def get_auth0_jwks():
+    """Get Auth0 JSON Web Key Set (JWKS) for token validation."""
+    global _jwks_cache
+    if not settings.auth0_domain:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Auth0 domain not configured"
+        )
+    if _jwks_cache is None:
+        jwks_url = f"https://{settings.auth0_domain}/.well-known/jwks.json"
+        try:
+            response = httpx.get(jwks_url, timeout=5.0)
+            response.raise_for_status()
+            _jwks_cache = response.json()
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Failed to fetch Auth0 JWKS: {str(e)}"
+            )
+    return _jwks_cache
+
+
+def get_rsa_key(token: str):
+    """Get RSA public key from Auth0 JWKS for token validation."""
     try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
+        unverified_header = jwt.get_unverified_header(token)
+        jwks = get_auth0_jwks()
+        
+        rsa_key = {}
+        for key in jwks["keys"]:
+            if key["kid"] == unverified_header["kid"]:
+                rsa_key = key
+                break
+        
+        if not rsa_key:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authorization scheme. Expected 'Bearer'"
-            )
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header format"
-        )
-    
-    # TODO: Replace this with actual Auth0 token validation
-    # For now, decode without verification (NOT SECURE - for development only)
-    # Once Auth0 is set up, you'll need to:
-    # 1. Get Auth0 domain from environment
-    # 2. Get Auth0 audience from environment
-    # 3. Verify token signature and claims
-    # 4. Extract user_id from the appropriate claim (usually 'sub')
-    
-    try:
-        # TEMPORARY: Decode without verification (remove in production!)
-        # In production, use: jwt.decode(token, jwks, algorithms=["RS256"], audience=auth0_audience)
-        decoded_token = jwt.decode(token, options={"verify_signature": False})
-        
-        # Extract user ID from token (Auth0 typically uses 'sub' claim)
-        user_id = decoded_token.get("sub")
-        
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token missing user ID (sub claim)"
+                detail="Unable to find appropriate key in JWKS",
+                headers={"WWW-Authenticate": "Bearer"},
             )
         
-        return user_id
+        # Convert JWK to RSA public key
+        # Decode base64url-encoded values (add padding if needed)
+        def decode_base64url(value):
+            # Ensure value is a string
+            if isinstance(value, bytes):
+                value = value.decode('utf-8')
+            # Add padding if needed
+            missing_padding = len(value) % 4
+            if missing_padding:
+                value = value + ('=' * (4 - missing_padding))
+            # Replace URL-safe characters
+            value = value.replace('-', '+').replace('_', '/')
+            return base64.b64decode(value)
         
-    except jwt.DecodeError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token format"
+        n_bytes = decode_base64url(rsa_key["n"])
+        e_bytes = decode_base64url(rsa_key["e"])
+        
+        public_numbers = rsa.RSAPublicNumbers(
+            int.from_bytes(e_bytes, 'big'),
+            int.from_bytes(n_bytes, 'big')
         )
+        public_key = public_numbers.public_key(default_backend())
+        
+        return public_key
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token validation failed: {str(e)}"
+            detail=f"Error processing token key: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
 
-# Example of how to properly validate Auth0 tokens (commented out for now):
-"""
-import requests
-from jose import jwt
-from jose.utils import base64url_decode
-
-def get_jwks(auth0_domain: str):
-    '''Fetch Auth0 JSON Web Key Set'''
-    jwks_url = f"https://{auth0_domain}/.well-known/jwks.json"
-    response = requests.get(jwks_url)
-    return response.json()
-
-def verify_token(token: str, auth0_domain: str, auth0_audience: str) -> dict:
-    '''Verify and decode Auth0 JWT token'''
-    jwks = get_jwks(auth0_domain)
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
+    """
+    Get current authenticated user from Auth0 JWT token.
+    Validates token and returns user info including profile data.
+    """
+    token = credentials.credentials
     
-    # Get the key ID from token header
-    unverified_header = jwt.get_unverified_header(token)
-    rsa_key = {}
-    for key in jwks["keys"]:
-        if key["kid"] == unverified_header["kid"]:
-            rsa_key = {
-                "kty": key["kty"],
-                "kid": key["kid"],
-                "use": key["use"],
-                "n": key["n"],
-                "e": key["e"]
-            }
-    
-    if rsa_key:
-        # Verify and decode
+    try:
+        # Validate Auth0 JWT token
+        rsa_key = get_rsa_key(token)
+        
         payload = jwt.decode(
             token,
             rsa_key,
-            algorithms=["RS256"],
-            audience=auth0_audience,
-            issuer=f"https://{auth0_domain}/"
+            algorithms=[settings.auth0_algorithm],
+            audience=settings.auth0_api_audience,
+            issuer=f"https://{settings.auth0_domain}/"
         )
-        return payload
-    
-    raise ValueError("Unable to find appropriate key")
-"""
+        
+        user_id = payload.get("sub")  # Auth0 user ID (e.g., "auth0|xxxxx")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing subject",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Get profile data from our profiles table
+        supabase = get_admin_supabase_client()
+        profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        profile_data = profile_response.data[0] if profile_response.data else {}
+        
+        return {
+            "id": user_id,
+            "email": payload.get("email", ""),
+            "username": profile_data.get("username", ""),
+            "full_name": profile_data.get("full_name"),
+            "role": profile_data.get("role", "public"),
+            "is_active": True
+        }
+        
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Include the actual error message for debugging
+        error_detail = f"Could not validate credentials: {str(e)}"
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_detail,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def get_current_active_user(
+    current_user: dict = Depends(get_current_user)
+) -> dict:
+    """Dependency to get current active user."""
+    if not current_user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user"
+        )
+    return current_user
+
+
+async def require_field_researcher(
+    current_user: dict = Depends(get_current_active_user)
+) -> dict:
+    """Dependency to require field_researcher or admin role."""
+    role = current_user.get("role")
+    if role not in ["field_researcher", "admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Field researcher or admin access required"
+        )
+    return current_user
