@@ -13,6 +13,7 @@ function MenuContent({ onClose }: { onClose: () => void }) {
     { name: 'Login / Signup', route: '/login', icon: 'log-in-outline' as const },
     { name: 'Home', route: '/home', icon: 'home-outline' as const },
     { name: 'Map', route: '/map', icon: 'map-outline' as const },
+    { name: 'Analytics', route: '/analytics', icon: 'stats-chart-outline' as const },
     { name: 'Debug Location', route: '/DebugLocation', icon: 'location-outline' as const },
   ];
 
@@ -134,6 +135,12 @@ export default function Layout() {
         name="map"
         options={{
           title: 'Map',
+        }}
+      />
+      <Stack.Screen
+        name="analytics"
+        options={{
+          title: 'Analytics',
         }}
       />
       <Stack.Screen

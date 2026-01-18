@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // For Expo Go on physical device, use your computer's IP address instead of localhost
 const API_BASE_URL = __DEV__ 
-  ? 'http://169.233.194.175:8000/api/v1'  // Your computer's IP for Expo Go on physical device
+  ? 'http://169.233.183.248:8000/api/v1'  // Your computer's IP for Expo Go on physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
 
 // Token storage key
@@ -247,5 +247,120 @@ export const logAPI = {
       headers,
     });
     return handleResponse(response);
+  },
+};
+
+// Reddit Sightings API calls
+export interface RedditSighting {
+  id: string;
+  reddit_id: string;
+  title?: string;
+  content?: string;
+  species?: string[];
+  location_name?: string;
+  latitude?: number;
+  longitude?: number;
+  full_address?: string;
+  timestamp?: string;
+  reddit_url: string;
+  subreddit?: string;
+  score: number;
+  num_comments: number;
+  raw_data?: Record<string, any>;  // Flexible JSON data from Reddit
+  metadata?: Record<string, any>;  // Processed metadata
+}
+
+export const redditSightingsAPI = {
+  // Get Reddit-sourced wildlife sightings
+  async getSightings(options?: {
+    species?: string;
+    limit?: number;
+    days?: number;
+  }) {
+    const params = new URLSearchParams();
+    if (options?.species) params.append('species', options.species);
+    if (options?.limit) params.append('limit', options.limit.toString());
+    if (options?.days) params.append('days', options.days.toString());
+    
+    const url = `${API_BASE_URL}/reddit-sightings${params.toString() ? '?' + params.toString() : ''}`;
+    console.log('Fetching Reddit sightings from:', url);
+    
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      // Check if response is ok before trying to parse
+      if (!response.ok) {
+        let errorDetail = '';
+        try {
+          const errorData = await response.json();
+          errorDetail = errorData.detail || errorData.message || JSON.stringify(errorData);
+        } catch (e) {
+          errorDetail = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(`Backend error: ${errorDetail}`);
+      }
+      
+      return handleResponse<RedditSighting[]>(response);
+    } catch (error: any) {
+      console.error('Network error details:', error);
+      
+      // Provide more specific error messages
+      if (error.message && error.message.includes('Backend error')) {
+        throw error; // Re-throw backend errors as-is
+      } else if (error.message && error.message.includes('Network request failed')) {
+        throw new Error(
+          `Cannot connect to backend at ${API_BASE_URL}. ` +
+          `Make sure the backend is running on port 8000. ` +
+          `Check: 1) Backend is running, 2) Correct IP address, 3) Phone and computer on same network.`
+        );
+      } else {
+        throw new Error(`Failed to fetch Reddit sightings: ${error.message || 'Unknown error'}`);
+      }
+    }
+  },
+
+  // Trigger Reddit scraper to fetch new sightings
+  async triggerScrape(): Promise<{ message: string; status: string; note?: string }> {
+    const url = `${API_BASE_URL}/reddit-sightings/scrape`;
+    
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        let errorDetail = '';
+        try {
+          const errorData = await response.json();
+          errorDetail = errorData.detail?.message || errorData.detail || JSON.stringify(errorData);
+          
+          // Handle rate limit specifically
+          if (response.status === 429) {
+            const retryAfter = errorData.detail?.retry_after_minutes;
+            throw new Error(
+              retryAfter 
+                ? `Please wait ${retryAfter} more minutes before refreshing again.`
+                : errorDetail
+            );
+          }
+        } catch (e) {
+          errorDetail = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(errorDetail);
+      }
+
+      return handleResponse<{ message: string; status: string; note?: string }>(response);
+    } catch (error: any) {
+      console.error('Error triggering scraper:', error);
+      throw error;
+    }
   },
 };
