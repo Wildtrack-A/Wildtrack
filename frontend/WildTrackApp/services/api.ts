@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // For Expo Go on physical device, use your computer's IP address instead of localhost
 const API_BASE_URL = __DEV__ 
-  ? 'http://169.233.183.248:8000/api/v1'  // Your computer's IP for Expo Go on physical device
+  ? 'http://169.233.131.171:8000/api/v1'  // Your computer's IP for Expo Go on physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
 
 // Token storage key
