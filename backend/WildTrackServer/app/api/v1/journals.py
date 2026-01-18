@@ -12,6 +12,9 @@ from app.models.journal import (
 from app.database import get_admin_supabase_client
 from app.auth import get_current_user
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -284,15 +287,29 @@ async def create_log(journal_id: str, log: AnimalLogCreate, current_user: dict =
     supabase = get_admin_supabase_client()
     
     try:
-        # Verify journal exists and belongs to user
-        journal_check = supabase.table("journals").select("id, user_id").eq("id", journal_id).execute()
-        if not journal_check.data:
+        # Validate journal_id is not empty
+        if not journal_id or not journal_id.strip():
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Journal not found"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Journal ID is required"
             )
         
-        if journal_check.data[0].get("user_id") != user_id:
+        # Verify journal exists and belongs to user
+        journal_check = supabase.table("journals").select("id, user_id, name").eq("id", journal_id).execute()
+        
+        if not journal_check.data or len(journal_check.data) == 0:
+            logger.warning(f"Journal not found: journal_id={journal_id}, user_id={user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Journal not found. The journal may have been deleted or the ID is invalid."
+            )
+        
+        journal_data = journal_check.data[0]
+        if journal_data.get("user_id") != user_id:
+            logger.warning(
+                f"Permission denied: journal_id={journal_id}, "
+                f"journal_user_id={journal_data.get('user_id')}, current_user_id={user_id}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have permission to add logs to this journal"

@@ -251,7 +251,30 @@ export default function Home() {
     }
 
     if (!selectedJournalId) {
-      Alert.alert('Error', 'Please select or create a journal first');
+      Alert.alert('Error', 'Please select a journal first');
+      return;
+    }
+
+    // Validate journal ID is not a temp ID
+    if (selectedJournalId.startsWith('temp-')) {
+      Alert.alert(
+        'Journal Not Ready',
+        'The journal is still being created. Please wait a moment and try again.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    // Verify journal exists in local state
+    const journalExists = journals.some(j => j.id === selectedJournalId);
+    if (!journalExists) {
+      Alert.alert(
+        'Journal Not Found',
+        'The selected journal could not be found. Please select a different journal or refresh the page.',
+        [{ text: 'OK' }]
+      );
+      // Try to reload journals
+      loadJournals();
       return;
     }
 
@@ -318,22 +341,29 @@ export default function Home() {
       Alert.alert('Success', 'Log entry saved!');
     } catch (error: any) {
       console.error('Error saving log:', error);
-      // Extract more detailed error message
-      let errorMessage = 'Failed to save log';
+      
+      // Provide more helpful error messages
+      let errorMessage = 'Failed to save log entry.';
+      
       if (error.message) {
-        errorMessage = error.message;
+        if (error.message.includes('Journal not found')) {
+          errorMessage = 'The journal could not be found. It may have been deleted. Please select a different journal.';
+          // Reload journals to sync state
+          loadJournals();
+        } else if (error.message.includes('permission')) {
+          errorMessage = 'You don\'t have permission to add logs to this journal.';
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
+        } else {
+          errorMessage = error.message;
+        }
       } else if (error.response?.data?.detail) {
         errorMessage = error.response.data.detail;
       } else if (typeof error === 'string') {
         errorMessage = error;
       }
       
-      Alert.alert(
-        'Error Saving Log',
-        errorMessage,
-        [{ text: 'OK' }],
-        { cancelable: true }
-      );
+      Alert.alert('Error', errorMessage);
     }
   };
 
@@ -488,6 +518,40 @@ export default function Home() {
   };
 
   const openLogModal = async () => {
+    // Ensure a journal is selected
+    if (!selectedJournalId) {
+      Alert.alert(
+        'No Journal Selected',
+        'Please select a journal first before adding a log entry.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    // Check if selected journal is a temp ID (still being created)
+    if (selectedJournalId.startsWith('temp-')) {
+      Alert.alert(
+        'Journal Not Ready',
+        'Please wait for the journal to finish creating before adding log entries.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    // Verify journal exists in local state
+    const journalExists = journals.some(j => j.id === selectedJournalId);
+    if (!journalExists) {
+      Alert.alert(
+        'Journal Not Found',
+        'The selected journal could not be found. Please select a different journal or try refreshing.',
+        [
+          { text: 'OK' },
+          { text: 'Refresh', onPress: () => loadJournals() }
+        ]
+      );
+      return;
+    }
+    
     if (journals.length === 0) {
       Alert.alert(
         'No Journals',
@@ -497,10 +561,6 @@ export default function Home() {
           { text: 'Create Journal', onPress: () => setShowJournalModal(true) }
         ]
       );
-      return;
-    }
-    if (!selectedJournalId) {
-      Alert.alert('No Journal Selected', 'Please select a journal first to add logs.');
       return;
     }
     // Reset log form state when opening modal

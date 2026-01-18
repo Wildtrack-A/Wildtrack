@@ -65,12 +65,18 @@ function base64URLEncode(str: string): string {
 /**
  * Login with Auth0 using Universal Login
  * Redirects to Auth0's hosted login page
+ * 
  * @param screen - Optional: 'signup' to show signup screen, 'login' to show login screen
+ * @returns Access token string if successful, null if cancelled, throws error on failure
+ * 
+ * @throws {Error} If authentication fails with error details
  */
 export async function loginWithAuth0(screen?: 'signup' | 'login'): Promise<string | null> {
+  let codeVerifier: string | null = null;
+  
   try {
-    // Generate code verifier for PKCE (43-128 characters)
-    const codeVerifier = generateRandomString(43);
+    // Generate code verifier for PKCE (43-128 characters, recommend 43+ for security)
+    codeVerifier = generateRandomString(43);
     
     // Generate code challenge (SHA256 hash of verifier, base64url encoded)
     const codeChallengeBase64 = await Crypto.digestStringAsync(
@@ -81,11 +87,15 @@ export async function loginWithAuth0(screen?: 'signup' | 'login'): Promise<strin
     const codeChallenge = base64URLEncode(codeChallengeBase64);
     
     // Store code verifier temporarily (in case of app reload during redirect)
-    await AsyncStorage.setItem(PKCE_CODE_VERIFIER_KEY, codeVerifier);
+    await AsyncStorage.setItem(PKCE_CODE_VERIFIER_KEY, codeVerifier).catch(err => {
+      console.warn('Failed to store PKCE code verifier:', err);
+    });
 
     // Log the exact redirect URI being used (important for debugging)
-    console.log('🔗 Using Redirect URI:', REDIRECT_URI);
-    console.log('📱 Make sure this EXACT URI is in Auth0 Allowed Callback URLs');
+    if (__DEV__) {
+      console.log('🔗 Using Redirect URI:', REDIRECT_URI);
+      console.log('📱 Make sure this EXACT URI is in Auth0 Allowed Callback URLs');
+    }
     
     // Create auth request with manually generated PKCE params
     const request = new AuthSession.AuthRequest({
@@ -108,78 +118,141 @@ export async function loginWithAuth0(screen?: 'signup' | 'login'): Promise<strin
       showInRecents: true,
     });
 
+    // Clean up stored code verifier after prompt
+    await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY).catch(() => {});
+
     if (result.type === 'success') {
-      // Retrieve code verifier (use stored one in case variable was lost)
+      // Retrieve code verifier (use stored one as fallback in case variable was lost)
       const storedCodeVerifier = await AsyncStorage.getItem(PKCE_CODE_VERIFIER_KEY);
       const verifierToUse = storedCodeVerifier || codeVerifier;
       
-      // Exchange authorization code for access token
-      const tokenResult = await AuthSession.exchangeCodeAsync(
-        {
-          clientId: AUTH0_CLIENT_ID,
-          code: result.params.code,
-          redirectUri: REDIRECT_URI,
-          extraParams: {
-            code_verifier: verifierToUse,
-            audience: AUTH0_AUDIENCE, // Include audience in token exchange
-          },
-        },
-        discovery
-      );
+      if (!verifierToUse) {
+        throw new Error('PKCE code verifier missing. Please try logging in again.');
+      }
       
-      // Clean up stored code verifier
-      await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+      // Exchange authorization code for access token
+      let tokenResult;
+      try {
+        tokenResult = await AuthSession.exchangeCodeAsync(
+          {
+            clientId: AUTH0_CLIENT_ID,
+            code: result.params.code,
+            redirectUri: REDIRECT_URI,
+            extraParams: {
+              code_verifier: verifierToUse,
+              audience: AUTH0_AUDIENCE, // Include audience in token exchange
+            },
+          },
+          discovery
+        );
+      } catch (exchangeError: any) {
+        console.error('Token exchange failed:', exchangeError);
+        
+        // Provide helpful error messages
+        if (exchangeError.message?.includes('invalid_grant')) {
+          throw new Error('Authentication code expired or invalid. Please try logging in again.');
+        } else if (exchangeError.message?.includes('invalid_client')) {
+          throw new Error('Authentication configuration error. Please contact support.');
+        } else if (exchangeError.message?.includes('network')) {
+          throw new Error('Network error during authentication. Please check your connection and try again.');
+        }
+        throw new Error(`Failed to exchange authorization code: ${exchangeError.message || 'Unknown error'}`);
+      }
+      
+      // Clean up any remaining stored code verifier
+      await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY).catch(() => {});
 
       // Get the access token
       const accessToken = tokenResult.accessToken;
       
-      if (accessToken) {
-        // Store the token
-        await setAuthToken(accessToken);
-        return accessToken;
+      if (!accessToken) {
+        throw new Error('No access token received from Auth0');
       }
+      
+      // Store the token
+      try {
+        await setAuthToken(accessToken);
+      } catch (storageError) {
+        console.error('Failed to store auth token:', storageError);
+        throw new Error('Failed to save authentication token. Please try again.');
+      }
+      
+      return accessToken;
     } else if (result.type === 'error') {
-      // Clean up stored code verifier on error
-      await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+      const errorCode = result.error?.code;
+      const errorMessage = result.error?.message || result.params?.error_description || 'Authentication failed';
+      
       console.error('Auth0 login error:', result.error);
-      throw new Error(result.error?.message || 'Authentication failed');
+      
+      // Provide user-friendly error messages
+      let friendlyMessage = errorMessage;
+      if (errorCode === 'access_denied') {
+        friendlyMessage = 'Access denied. Please try again or contact support if this persists.';
+      } else if (errorCode === 'server_error') {
+        friendlyMessage = 'Authentication server error. Please try again in a moment.';
+      } else if (errorMessage.includes('network') || errorMessage.includes('timeout')) {
+        friendlyMessage = 'Network error during authentication. Please check your connection and try again.';
+      }
+      
+      throw new Error(friendlyMessage);
     } else if (result.type === 'cancel') {
-      // Clean up stored code verifier on cancel
-      await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+      // User cancelled authentication - this is not an error
       console.log('Auth0 login cancelled by user');
       return null;
     }
 
-    // Clean up stored code verifier if we get here
-    await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+    // Should not reach here, but handle just in case
+    console.warn('Unexpected auth result type:', result.type);
     return null;
-  } catch (error) {
+  } catch (error: any) {
     // Clean up stored code verifier on exception
     await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY).catch(() => {});
+    
+    // Re-throw if it's already a user-friendly error
+    if (error.message && !error.message.includes('Error during Auth0 login')) {
+      throw error;
+    }
+    
     console.error('Error during Auth0 login:', error);
-    throw error;
+    throw new Error(`Authentication failed: ${error.message || 'Unknown error'}`);
   }
 }
 
 /**
  * Logout from Auth0
- * Clears the stored token
+ * Clears the stored token and any related auth data
  */
 export async function logoutWithAuth0(): Promise<void> {
   try {
+    // Remove auth token
     await removeAuthToken();
+    
+    // Clean up any PKCE verifier that might be lingering
+    await AsyncStorage.removeItem(PKCE_CODE_VERIFIER_KEY).catch(() => {});
+    
+    // Clean up pending account type selection if any
+    await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY).catch(() => {});
   } catch (error) {
     console.error('Error during logout:', error);
-    throw error;
+    // Don't throw - logout should always succeed even if cleanup fails
+    // This ensures user can always log out
   }
 }
 
 /**
  * Check if user is authenticated
  * Returns true if a valid token exists
+ * 
+ * Note: This only checks for token presence, not validity.
+ * The token may still be expired or invalid.
  */
 export async function isAuthenticated(): Promise<boolean> {
-  const { getAuthToken } = await import('./api');
-  const token = await getAuthToken();
-  return token !== null && token.length > 0;
+  try {
+    const { getAuthToken } = await import('./api');
+    const token = await getAuthToken();
+    return token !== null && token.length > 0;
+  } catch (error) {
+    console.error('Error checking authentication status:', error);
+    return false;
+  }
 }
