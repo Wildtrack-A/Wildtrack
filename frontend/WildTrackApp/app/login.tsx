@@ -25,7 +25,26 @@ export default function Login() {
         // Sync user profile with backend
         try {
           await syncUserProfile();
-        } catch (error) {
+        } catch (error: any) {
+          // Check if it's an audience error
+          if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
+            Alert.alert(
+              'Authentication Error',
+              'Your session token has an invalid audience. This usually means your Auth0 API audience configuration doesn\'t match. Please try signing in again to get a fresh token.\n\nIf this persists, check that your backend .env has AUTH0_API_AUDIENCE set correctly.',
+              [
+                {
+                  text: 'Sign In Again',
+                  style: 'default',
+                  onPress: () => {
+                    // Token already cleared by handleResponse, user can try again
+                    setLoading(false);
+                  }
+                }
+              ]
+            );
+            setLoading(false);
+            return;
+          }
           console.warn('Profile sync failed, continuing anyway:', error);
         }
         
@@ -36,7 +55,16 @@ export default function Login() {
       }
     } catch (error: any) {
       console.error('Login error:', error);
-      Alert.alert('Login Error', error.message || 'An error occurred during login. Please try again.');
+      // Check if it's an audience error
+      if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
+        Alert.alert(
+          'Authentication Error',
+          'Your session token is outdated. Please try signing in again.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Login Error', error.message || 'An error occurred during login. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -74,10 +102,27 @@ export default function Login() {
           
           // Sync user profile with the selected role
           await syncUserProfile(role);
-        } catch (error) {
-          console.warn('Profile sync failed, continuing anyway:', error);
+        } catch (error: any) {
           // Clear pending account type even if sync fails
           await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY);
+          
+          // Check if it's an audience error
+          if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
+            Alert.alert(
+              'Authentication Error',
+              'Please try signing up again. The session token was invalid.',
+              [
+                {
+                  text: 'OK',
+                  onPress: () => {
+                    // Token already cleared by handleResponse, just show signup again
+                  }
+                }
+              ]
+            );
+            return;
+          }
+          console.warn('Profile sync failed, continuing anyway:', error);
         }
         
         // Navigate to home
@@ -91,7 +136,17 @@ export default function Login() {
       // Clear pending account type on error
       await AsyncStorage.removeItem(PENDING_ACCOUNT_TYPE_KEY);
       console.error('Signup error:', error);
-      Alert.alert('Signup Error', error.message || 'An error occurred during signup. Please try again.');
+      
+      // Check if it's an audience error
+      if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
+        Alert.alert(
+          'Authentication Error',
+          'Your session token is outdated. Please try signing up again.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Signup Error', error.message || 'An error occurred during signup. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
