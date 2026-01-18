@@ -14,33 +14,23 @@ def get_user_id_from_token(request: Request) -> str:
     """
     Extract user ID from Auth0 JWT token.
     
-    This is a placeholder implementation. Once your friend provides:
-    - Auth0 domain/audience
-    - Token validation details
-    - User ID claim name (typically 'sub' in Auth0)
+    For proof of concept: If no auth token is provided, returns a default user ID.
+    This allows testing without Auth0 integration.
     
-    You'll need to update this function to properly validate and decode the token.
-    
-    For now, this expects:
-    - Authorization header: "Bearer <token>"
-    - Token contains a 'sub' claim with the user ID
+    Once Auth0 is integrated, remove the fallback and require authentication.
     
     Args:
         request: FastAPI Request object
         
     Returns:
-        str: User ID from the token
-        
-    Raises:
-        HTTPException: If token is missing or invalid
+        str: User ID from the token, or default user ID if no token provided
     """
     # Get authorization header
     auth_header = request.headers.get("Authorization")
     if not auth_header:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header missing"
-        )
+        # PROOF OF CONCEPT: Return default user ID when no auth token
+        # Remove this in production once Auth0 is integrated!
+        return "default_user_for_poc"
     
     # Extract token
     try:
