@@ -305,6 +305,28 @@ export const logAPI = {
   },
 };
 
+// Animal Search API calls
+export const searchAPI = {
+  // Search for animal information using Gemini
+  async searchAnimal(animalName: string): Promise<{
+    animal_name: string;
+    information: string;
+    source: string;
+  }> {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/search-animal?animal_name=${encodeURIComponent(animalName)}`, {
+      method: 'GET',
+      headers,
+    });
+    return handleResponse(response);
+  },
+};
+
+// Alias for convenience
+export async function searchAnimal(animalName: string) {
+  return searchAPI.searchAnimal(animalName);
+}
+
 // Reddit Sightings API calls
 export interface RedditSighting {
   id: string;

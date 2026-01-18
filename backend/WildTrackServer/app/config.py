@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # API Configuration
     api_v1_prefix: str = "/api/v1"
     
+    # Gemini API Configuration (for animal search)
+    gemini_api_key: Optional[str] = None
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
