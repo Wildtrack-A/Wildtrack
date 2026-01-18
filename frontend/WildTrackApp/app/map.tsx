@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { View, StyleSheet, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import MapView, { Marker, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { redditSightingsAPI, RedditSighting } from '../services/api';
+import { redditSightingsAPI, RedditSighting, zonesAPI, ZonesResponse, Zone } from '../services/api';
+
+// Generate a color for each species (consistent colors)
+const getSpeciesColor = (species: string, index: number): string => {
+  const colors = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+    '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
+  ];
+  return colors[index % colors.length];
+};
 
 function MapScreen() {
   const mapRef = useRef<any>(null);
@@ -18,6 +27,14 @@ function MapScreen() {
   const [topSpecies, setTopSpecies] = useState<Array<{ species: string; count: number }>>([]);
   const [mapReady, setMapReady] = useState(false);
   const [dataView, setDataView] = useState<'my-data' | 'world-data'>('world-data');
+
+  // Zones state
+  const [zonesData, setZonesData] = useState<ZonesResponse | null>(null);
+  const [zonesLoading, setZonesLoading] = useState(false);
+  const [zonesError, setZonesError] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<'field_researcher' | 'public' | null>(null);
+  const [selectedZone, setSelectedZone] = useState<Zone | null>(null);
+  const [zonePopupVisible, setZonePopupVisible] = useState(false);
 
   // Track user location continuously
   useEffect(() => {
@@ -91,6 +108,25 @@ function MapScreen() {
         setError(error.message || 'Failed to load sightings');
       } finally {
         setLoading(false);
+      }
+    })();
+  }, []);
+
+  // Load zones data (requires authentication)
+  useEffect(() => {
+    (async () => {
+      setZonesLoading(true);
+      setZonesError(null);
+      try {
+        const zones = await zonesAPI.getAllZones();
+        setZonesData(zones);
+        setUserRole(zones.role);
+        console.log(`Loaded ${zones.total_zones} zones as ${zones.role}`);
+      } catch (error: any) {
+        console.error('Error loading zones:', error);
+        setZonesError(error.message || 'Failed to load zones');
+      } finally {
+        setZonesLoading(false);
       }
     })();
   }, []);
@@ -214,7 +250,7 @@ function MapScreen() {
           {/* Markers for filtered sightings - only show when World Data is selected */}
           {dataView === 'world-data' && filteredSightings.map((sighting) => {
             if (!sighting.latitude || !sighting.longitude) return null;
-            
+
             return (
               <Marker
                 key={sighting.id}
@@ -237,6 +273,80 @@ function MapScreen() {
               </Marker>
             );
           })}
+
+          {/* Zone Boundaries (Polygons) - shown on World Data view */}
+          {dataView === 'world-data' && zonesData && Object.values(zonesData.zones).map((zone, index) => {
+            // Filter by selected species if one is selected
+            if (selectedSpecies && zone.species !== selectedSpecies) return null;
+
+            const color = getSpeciesColor(zone.species, index);
+
+            return (
+              <Polygon
+                key={`zone-boundary-${zone.zone_id}`}
+                coordinates={zone.boundary}
+                strokeColor={color}
+                fillColor={`${color}33`}  // 20% opacity
+                strokeWidth={2}
+                tappable={true}
+                onPress={() => {
+                  setSelectedZone(zone);
+                  setZonePopupVisible(true);
+                }}
+              />
+            );
+          })}
+
+          {/* Individual GPS Points - only for field researchers on World Data view */}
+          {dataView === 'world-data' && zonesData && userRole === 'field_researcher' &&
+            Object.values(zonesData.zones).map((zone, zoneIndex) => {
+              // Filter by selected species if one is selected
+              if (selectedSpecies && zone.species !== selectedSpecies) return null;
+              if (!zone.individual_points) return null;
+
+              const color = getSpeciesColor(zone.species, zoneIndex);
+
+              return zone.individual_points.map((point, pointIndex) => (
+                <Marker
+                  key={`zone-${zone.zone_id}-point-${pointIndex}`}
+                  coordinate={{
+                    latitude: point.latitude,
+                    longitude: point.longitude,
+                  }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={[styles.zonePointMarker, { backgroundColor: color }]} />
+                </Marker>
+              ));
+            })
+          }
+
+          {/* Zone Centers - only for field researchers on World Data view */}
+          {dataView === 'world-data' && zonesData && userRole === 'field_researcher' &&
+            Object.values(zonesData.zones).map((zone, index) => {
+              if (selectedSpecies && zone.species !== selectedSpecies) return null;
+              if (!zone.center) return null;
+
+              const color = getSpeciesColor(zone.species, index);
+
+              return (
+                <Marker
+                  key={`zone-center-${zone.zone_id}`}
+                  coordinate={{
+                    latitude: zone.center.latitude,
+                    longitude: zone.center.longitude,
+                  }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={[styles.zoneCenterMarker, { borderColor: color }]}>
+                    <Text style={[styles.zoneCenterText, { color }]}>
+                      {zone.point_count || '?'}
+                    </Text>
+                  </View>
+                </Marker>
+              );
+            })
+          }
         </MapView>
 
         {/* Loading/Error Overlay */}
@@ -254,14 +364,45 @@ function MapScreen() {
           </View>
         )}
 
-        {!loading && !error && dataView === 'world-data' && filteredSightings.length === 0 && (
+        {!loading && !error && dataView === 'world-data' && filteredSightings.length === 0 && !zonesData && !zonesLoading && (
           <View style={styles.overlay}>
             <Ionicons name="map-outline" size={48} color="#999" />
             <Text style={styles.emptyText}>
-              {selectedSpecies 
+              {selectedSpecies
                 ? `No ${selectedSpecies} sightings with locations found`
                 : 'No sightings with locations found'}
             </Text>
+          </View>
+        )}
+
+        {/* Zones Loading - show on World Data view too */}
+        {dataView === 'world-data' && zonesLoading && (
+          <View style={[styles.overlay, { backgroundColor: 'rgba(255, 255, 255, 0.7)' }]}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={styles.overlayText}>Loading zones...</Text>
+          </View>
+        )}
+
+        {/* Zones Loading/Error - for My Data view */}
+        {dataView === 'my-data' && zonesLoading && (
+          <View style={styles.overlay}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={styles.overlayText}>Loading zones...</Text>
+          </View>
+        )}
+
+        {dataView === 'my-data' && zonesError && !zonesLoading && (
+          <View style={styles.overlay}>
+            <Ionicons name="alert-circle" size={48} color="#FF6B6B" />
+            <Text style={styles.errorText}>{zonesError}</Text>
+            <Text style={styles.emptyText}>Please login to view zones</Text>
+          </View>
+        )}
+
+        {dataView === 'my-data' && !zonesLoading && !zonesError && !zonesData && (
+          <View style={styles.overlay}>
+            <Ionicons name="map-outline" size={48} color="#999" />
+            <Text style={styles.emptyText}>No zone data available</Text>
           </View>
         )}
       </View>
@@ -427,6 +568,63 @@ function MapScreen() {
                 );
               })}
             </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Zone Info Popup Modal */}
+      <Modal
+        visible={zonePopupVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setZonePopupVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setZonePopupVisible(false)}
+        >
+          <View style={styles.zonePopup} onStartShouldSetResponder={() => true}>
+            {selectedZone && (
+              <>
+                <View style={styles.zonePopupHeader}>
+                  <Ionicons name="paw" size={28} color="#FF6B6B" />
+                  <Text style={styles.zonePopupTitle}>{selectedZone.species}</Text>
+                  <TouchableOpacity onPress={() => setZonePopupVisible(false)}>
+                    <Ionicons name="close" size={24} color="#333" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.zonePopupContent}>
+                  <View style={styles.zonePopupRow}>
+                    <Ionicons name="eye-outline" size={20} color="#666" />
+                    <Text style={styles.zonePopupLabel}>Sightings in zone:</Text>
+                    <Text style={styles.zonePopupValue}>
+                      {selectedZone.point_count || selectedZone.boundary?.length || 'N/A'}
+                    </Text>
+                  </View>
+                  <View style={styles.zonePopupRow}>
+                    <Ionicons name="navigate-outline" size={20} color="#666" />
+                    <Text style={styles.zonePopupLabel}>Zone ID:</Text>
+                    <Text style={styles.zonePopupValue}>#{selectedZone.zone_id}</Text>
+                  </View>
+                  {selectedZone.center && (
+                    <View style={styles.zonePopupRow}>
+                      <Ionicons name="location-outline" size={20} color="#666" />
+                      <Text style={styles.zonePopupLabel}>Center:</Text>
+                      <Text style={styles.zonePopupValue}>
+                        {selectedZone.center.latitude.toFixed(4)}, {selectedZone.center.longitude.toFixed(4)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={styles.zonePopupButton}
+                  onPress={() => setZonePopupVisible(false)}
+                >
+                  <Text style={styles.zonePopupButtonText}>Close</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -724,6 +922,93 @@ const styles = StyleSheet.create({
   },
   dropdownItemTextActive: {
     color: '#007AFF',
+    fontWeight: '600',
+  },
+  // Zone marker styles
+  zonePointMarker: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#fff',
+  },
+  zoneCenterMarker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  zoneCenterText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  // Zone popup styles
+  zonePopup: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    width: '85%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    overflow: 'hidden',
+  },
+  zonePopupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+    gap: 12,
+  },
+  zonePopupTitle: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  zonePopupContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    gap: 12,
+  },
+  zonePopupRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  zonePopupLabel: {
+    flex: 1,
+    fontSize: 14,
+    color: '#666',
+  },
+  zonePopupValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  zonePopupButton: {
+    backgroundColor: '#007AFF',
+    marginHorizontal: 20,
+    marginBottom: 20,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  zonePopupButtonText: {
+    color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
   },
 });
