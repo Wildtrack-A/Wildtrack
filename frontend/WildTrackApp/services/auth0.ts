@@ -121,6 +121,7 @@ export async function loginWithAuth0(screen?: 'signup' | 'login'): Promise<strin
           redirectUri: REDIRECT_URI,
           extraParams: {
             code_verifier: verifierToUse,
+            audience: AUTH0_AUDIENCE, // Include audience in token exchange
           },
         },
         discovery

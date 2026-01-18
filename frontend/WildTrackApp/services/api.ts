@@ -10,6 +10,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // For Expo Go on physical device, use your computer's IP address instead of localhost
+// NOTE: Update this IP address if your computer's IP changes!
+// To find your IP: Windows: ipconfig, Mac/Linux: ifconfig
 const API_BASE_URL = __DEV__ 
   ? 'http://169.233.131.171:8000/api/v1'  // Your computer's IP for Expo Go on physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
@@ -65,6 +67,9 @@ async function getAuthHeaders(): Promise<HeadersInit> {
   const token = await getAuthToken();
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  } else {
+    console.warn('⚠️ No auth token found. API requests may fail with 401 Unauthorized.');
+    console.warn('💡 Please log in first to get an authentication token.');
   }
   
   return headers;
@@ -74,9 +79,11 @@ async function getAuthHeaders(): Promise<HeadersInit> {
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let errorMessage = `HTTP error! status: ${response.status}`;
+    let errorDetail: any = null;
+    
     try {
-      const error = await response.json();
-      errorMessage = error.detail || error.message || JSON.stringify(error);
+      errorDetail = await response.json();
+      errorMessage = errorDetail.detail || errorDetail.message || JSON.stringify(errorDetail);
     } catch (e) {
       // If JSON parsing fails, try to get text
       try {
@@ -87,7 +94,25 @@ async function handleResponse<T>(response: Response): Promise<T> {
         errorMessage = `HTTP ${response.status}: ${response.statusText}`;
       }
     }
-    throw new Error(errorMessage);
+    
+    // Check if it's an invalid audience error - clear the token automatically
+    if (response.status === 401 && errorMessage.toLowerCase().includes('audience')) {
+      console.warn('⚠️ Invalid audience detected - clearing stored token');
+      await removeAuthToken();
+      
+      // Create a more helpful error
+      const helpfulError = new Error(
+        'Your session token is outdated. Please sign out and sign in again to get a new token with the correct audience.'
+      );
+      (helpfulError as any).shouldSignOut = true;
+      (helpfulError as any).originalError = errorMessage;
+      throw helpfulError;
+    }
+    
+    const error = new Error(errorMessage);
+    (error as any).status = response.status;
+    (error as any).detail = errorDetail;
+    throw error;
   }
   return response.json();
 }
@@ -162,16 +187,49 @@ export const authAPI = {
       console.log('🔄 Syncing profile with role:', role || 'none');
       console.log('📡 API URL:', `${API_BASE_URL}/auth/sync-profile`);
       
-      // Always send a body (even if empty) for POST requests
-      const response = await fetch(`${API_BASE_URL}/auth/sync-profile`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
+      // Create an AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
       
-      console.log('📥 Sync response status:', response.status, response.statusText);
-      
-      return handleResponse(response);
+      try {
+        // Always send a body (even if empty) for POST requests
+        const response = await fetch(`${API_BASE_URL}/auth/sync-profile`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        console.log('📥 Sync response status:', response.status, response.statusText);
+        
+        return handleResponse(response);
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        
+        // Handle timeout specifically
+        if (fetchError.name === 'AbortError') {
+          throw new Error(
+            `Network request timed out. Make sure:\n` +
+            `1. Backend server is running on ${API_BASE_URL.replace('/api/v1', '')}\n` +
+            `2. Backend is accessible from your device/emulator\n` +
+            `3. Firewall allows connections on port 8000`
+          );
+        }
+        
+        // Handle other network errors
+        if (fetchError.message && fetchError.message.includes('Network request failed')) {
+          throw new Error(
+            `Cannot connect to backend at ${API_BASE_URL.replace('/api/v1', '')}.\n` +
+            `Make sure:\n` +
+            `1. Backend server is running\n` +
+            `2. Correct IP address in services/api.ts (currently: ${API_BASE_URL.replace('/api/v1', '')})\n` +
+            `3. Device and computer are on the same network`
+          );
+        }
+        
+        throw fetchError;
+      }
     } catch (error: any) {
       console.error('❌ Sync profile error details:', {
         message: error.message,

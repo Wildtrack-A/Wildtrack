@@ -106,6 +106,7 @@ async def get_current_user(
         # Validate Auth0 JWT token
         rsa_key = get_rsa_key(token)
         
+        # Decode and verify Auth0 JWT token with audience validation
         payload = jwt.decode(
             token,
             rsa_key,
@@ -137,9 +138,20 @@ async def get_current_user(
         }
         
     except JWTError as e:
+        error_msg = str(e)
+        # Provide more helpful error messages for common JWT errors
+        if "audience" in error_msg.lower():
+            detail = f"Invalid token audience. Expected: {settings.auth0_api_audience}. Please sign out and sign in again to get a new token."
+        elif "expired" in error_msg.lower():
+            detail = "Your session has expired. Please sign in again."
+        elif "signature" in error_msg.lower():
+            detail = "Invalid token signature. Please sign in again."
+        else:
+            detail = f"Invalid token: {error_msg}. Please sign in again."
+        
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         )
     except HTTPException:

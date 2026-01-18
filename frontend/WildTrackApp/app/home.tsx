@@ -13,6 +13,7 @@ import {
   Platform,
   ActivityIndicator
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -40,6 +41,7 @@ interface Journal {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [journals, setJournals] = useState<Journal[]>([]);
   const [loading, setLoading] = useState(true);
   const [showLogModal, setShowLogModal] = useState(false);
@@ -91,8 +93,26 @@ export default function Home() {
       const convertedJournals = backendJournals.map(convertBackendToFrontend);
       setJournals(convertedJournals);
     } catch (error: any) {
-      Alert.alert('Error', `Failed to load journals: ${error.message}`);
       console.error('Error loading journals:', error);
+      
+      // Check if it's an audience error that requires re-authentication
+      if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
+        Alert.alert(
+          'Session Expired',
+          'Your session token is outdated. Please sign in again to continue.',
+          [
+            {
+              text: 'Sign In',
+              onPress: () => {
+                // Navigate to login screen
+                router.replace('/login');
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Error', `Failed to load journals: ${error.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -197,12 +217,30 @@ export default function Home() {
       setJournals(prev => prev.map(j => j.id === tempId ? convertedJournal : j));
       // Don't show alert - journal already visible
     } catch (error: any) {
-      // Remove optimistic journal on error using functional update
-      setJournals(prev => prev.filter(j => j.id !== tempId));
-      Alert.alert('Error', `Failed to create journal: ${error.message}`);
-      console.error('Error creating journal:', error);
-      setShowJournalModal(true); // Reopen modal so user can try again
-      setNewJournalName(journalName);
+      // Check if it's an audience error that requires re-authentication
+      if (error.shouldSignOut || (error.message && error.message.toLowerCase().includes('audience'))) {
+        // Remove optimistic journal on error using functional update
+        setJournals(prev => prev.filter(j => j.id !== tempId));
+        Alert.alert(
+          'Session Expired',
+          'Your session token is outdated. Please sign in again to continue.',
+          [
+            {
+              text: 'Sign In',
+              onPress: () => {
+                router.replace('/login');
+              }
+            }
+          ]
+        );
+      } else {
+        // Remove optimistic journal on error using functional update
+        setJournals(prev => prev.filter(j => j.id !== tempId));
+        Alert.alert('Error', `Failed to create journal: ${error.message}`);
+        console.error('Error creating journal:', error);
+        setShowJournalModal(true); // Reopen modal so user can try again
+        setNewJournalName(journalName);
+      }
     }
   };
 
