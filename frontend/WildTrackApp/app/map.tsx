@@ -1,24 +1,25 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { View, StyleSheet, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, Linking } from 'react-native';
+import { View, StyleSheet, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { redditSightingsAPI, RedditSighting, zonesAPI, ZonesResponse, Zone } from '../services/api';
+import { journalAPI, zoneAPI, ZonePoint, Zone } from '../services/api';
 
-// Generate a color for each species (consistent colors)
-const getSpeciesColor = (species: string, index: number): string => {
-  const colors = [
-    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-    '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
-  ];
-  return colors[index % colors.length];
-};
+interface UserLog {
+  id: string;
+  species: string;
+  description: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timestamp: Date;
+  journal_id: string;
+}
 
 function MapScreen() {
   const mapRef = useRef<any>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
-  const [redditSightings, setRedditSightings] = useState<RedditSighting[]>([]);
+  const [userLogs, setUserLogs] = useState<UserLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedSpecies, setSelectedSpecies] = useState<string | null>(null);
@@ -26,15 +27,10 @@ function MapScreen() {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [topSpecies, setTopSpecies] = useState<Array<{ species: string; count: number }>>([]);
   const [mapReady, setMapReady] = useState(false);
-  const [dataView, setDataView] = useState<'my-data' | 'world-data'>('world-data');
-
-  // Zones state
-  const [zonesData, setZonesData] = useState<ZonesResponse | null>(null);
-  const [zonesLoading, setZonesLoading] = useState(false);
-  const [zonesError, setZonesError] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<'field_researcher' | 'public' | null>(null);
-  const [selectedZone, setSelectedZone] = useState<Zone | null>(null);
-  const [zonePopupVisible, setZonePopupVisible] = useState(false);
+  const [dataView, setDataView] = useState<'my-data' | 'world-data'>('my-data');
+  const [zoneData, setZoneData] = useState<(ZonePoint & { species?: string })[]>([]);
+  const [zones, setZones] = useState<Record<number, Zone>>({});
+  const [loadingZones, setLoadingZones] = useState(false);
 
   // Track user location continuously
   useEffect(() => {
@@ -92,86 +88,251 @@ function MapScreen() {
     };
   }, []);
 
-  // Load Reddit sightings once
+  // Load user's logs from all journals
   useEffect(() => {
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const sightings = await redditSightingsAPI.getSightings({
-          limit: 100,
-          days: 30,
+        const journals = await journalAPI.getAllJournals() as any[];
+        
+        // Extract all logs from all journals
+        const allLogs: UserLog[] = [];
+        journals.forEach((journal: any) => {
+          if (journal.logs) {
+            journal.logs.forEach((log: any) => {
+              allLogs.push({
+                id: log.id,
+                species: log.species,
+                description: log.description || null,
+                latitude: log.latitude || null,
+                longitude: log.longitude || null,
+                timestamp: new Date(log.timestamp),
+                journal_id: log.journal_id,
+              });
+            });
+          }
         });
-        setRedditSightings(sightings);
+        
+        setUserLogs(allLogs);
+        
+        // Debug: Log how many logs have locations
+        const withLocations = allLogs.filter(log => log.latitude && log.longitude);
+        console.log(`Loaded ${allLogs.length} user logs, ${withLocations.length} with locations`);
       } catch (error: any) {
-        console.error('Error loading Reddit sightings:', error);
-        setError(error.message || 'Failed to load sightings');
+        console.error('Error loading user logs:', error);
+        setError(error.message || 'Failed to load your logs');
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  // Load zones data (requires authentication)
-  useEffect(() => {
-    (async () => {
-      setZonesLoading(true);
-      setZonesError(null);
-      try {
-        const zones = await zonesAPI.getAllZones();
-        setZonesData(zones);
-        setUserRole(zones.role);
-        console.log(`Loaded ${zones.total_zones} zones as ${zones.role}`);
-      } catch (error: any) {
-        console.error('Error loading zones:', error);
-        setZonesError(error.message || 'Failed to load zones');
-      } finally {
-        setZonesLoading(false);
-      }
-    })();
-  }, []);
-
-  // Calculate top species when sightings change
+  // Calculate top species from user's logs or zone data
   useEffect(() => {
     const speciesMap = new Map<string, number>();
-    redditSightings.forEach(sighting => {
-      sighting.species?.forEach(species => {
-        const count = speciesMap.get(species) || 0;
-        speciesMap.set(species, count + 1);
+    
+    if (dataView === 'my-data') {
+      // Count from user's logs
+      userLogs.forEach(log => {
+        if (log.species) {
+          const count = speciesMap.get(log.species) || 0;
+          speciesMap.set(log.species, count + 1);
+        }
       });
-    });
+    } else {
+      // Count from zone data (world data) - species is already attached to points
+      zoneData.forEach((point: any) => {
+        if (point.species) {
+          const count = speciesMap.get(point.species) || 0;
+          speciesMap.set(point.species, count + 1);
+        }
+      });
+    }
+    
     const top = Array.from(speciesMap.entries())
       .map(([species, count]) => ({ species, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 3);
     setTopSpecies(top);
-  }, [redditSightings]);
+  }, [userLogs, zoneData, dataView]);
 
-  // Get filtered sightings (memoized to prevent re-renders)
-  const filteredSightings = useMemo(() => {
-    if (!selectedSpecies) {
-      return redditSightings.filter(s => s.latitude && s.longitude);
+  // Load zone data when "World Data" is selected
+  useEffect(() => {
+    if (dataView === 'world-data') {
+      loadZoneData();
+    } else {
+      // Clear zone data when switching to "My Data"
+      setZoneData([]);
+      setZones({});
     }
-    return redditSightings.filter(sighting =>
-      sighting.species && sighting.species.some(s =>
-        s.toLowerCase() === selectedSpecies.toLowerCase()
-      ) && sighting.latitude && sighting.longitude
-    );
-  }, [selectedSpecies, redditSightings]);
+  }, [dataView]);
+
+  const loadZoneData = async () => {
+    setLoadingZones(true);
+    setError(null);
+    try {
+      // Try authenticated endpoint first, fallback to test endpoint
+      let response: any;
+      try {
+        response = await zoneAPI.getAllZones();
+      } catch (authError) {
+        // If auth fails, use test endpoint
+        console.log('Auth failed, using test endpoint');
+        try {
+          response = await zoneAPI.getAllZonesResearcher(); // Use researcher view to get GPS points
+        } catch (testError) {
+          console.error('Test endpoint also failed:', testError);
+          throw new Error('Failed to load zone data. Make sure the backend is running and has data in the observations table.');
+        }
+      }
+      
+      // Extract all individual GPS points from zones with species info
+      const allPoints: (ZonePoint & { species?: string })[] = [];
+      const zonesMap: Record<number, Zone> = {};
+      
+      if (Array.isArray(response.zones)) {
+        response.zones.forEach((zone: Zone) => {
+          zonesMap[zone.zone_id] = zone;
+          if (zone.individual_points) {
+            // Add species info to each point
+            const pointsWithSpecies = zone.individual_points.map(point => ({
+              ...point,
+              species: zone.species,
+            }));
+            allPoints.push(...pointsWithSpecies);
+          }
+        });
+      } else if (typeof response.zones === 'object') {
+        (Object.values(response.zones) as Zone[]).forEach((zone: Zone) => {
+          zonesMap[zone.zone_id] = zone;
+          if (zone.individual_points) {
+            // Add species info to each point
+            const pointsWithSpecies = zone.individual_points.map(point => ({
+              ...point,
+              species: zone.species,
+            }));
+            allPoints.push(...pointsWithSpecies);
+          }
+        });
+      }
+      
+      setZoneData(allPoints);
+      setZones(zonesMap);
+      
+      console.log(`Loaded ${allPoints.length} GPS points from ${Object.keys(zonesMap).length} zones`);
+    } catch (error: any) {
+      console.error('Error loading zone data:', error);
+      setError(error.message || 'Failed to load zone data');
+    } finally {
+      setLoadingZones(false);
+    }
+  };
+
+  // Get unique icon for each top species
+  const getSpeciesIcon = (species: string): { name: any; color: string } => {
+    const speciesLower = species.toLowerCase();
+    // Map species to unique icons with distinct colors
+    if (speciesLower.includes('tiger')) {
+      return { name: 'paw', color: '#FF6B6B' }; // Red for tigers
+    } else if (speciesLower.includes('elephant')) {
+      return { name: 'ellipse', color: '#4ECDC4' }; // Teal for elephants
+    } else if (speciesLower.includes('panda') || speciesLower.includes('bear')) {
+      return { name: 'radio-button-on', color: '#000000' }; // Black for pandas/bears
+    } else if (speciesLower.includes('rhino') || speciesLower.includes('rhinoceros')) {
+      return { name: 'triangle', color: '#8B4513' }; // Brown for rhinos
+    } else if (speciesLower.includes('gorilla') || speciesLower.includes('ape')) {
+      return { name: 'person', color: '#654321' }; // Dark brown for gorillas
+    } else if (speciesLower.includes('whale') || speciesLower.includes('dolphin')) {
+      return { name: 'water', color: '#1E90FF' }; // Blue for marine animals
+    } else if (speciesLower.includes('eagle') || speciesLower.includes('bird')) {
+      return { name: 'airplane', color: '#9370DB' }; // Purple for birds
+    } else if (speciesLower.includes('turtle') || speciesLower.includes('tortoise')) {
+      return { name: 'disc', color: '#228B22' }; // Green for turtles
+    } else {
+      // Default icon for other species
+      return { name: 'location', color: '#FF6B6B' };
+    }
+  };
+
+  // Get filtered logs or zone points based on data view
+  const filteredLogs = useMemo(() => {
+    if (dataView === 'world-data') {
+      // Filter zone data points
+      let points = zoneData;
+      
+      // If a specific species is selected, filter by that
+      if (selectedSpecies) {
+        points = zoneData.filter((point: any) => 
+          point.species && point.species.toLowerCase() === selectedSpecies.toLowerCase()
+        );
+      } else if (topSpecies.length > 0) {
+        // Filter to top 3 species
+        const topSpeciesNames = topSpecies.map(s => s.species.toLowerCase());
+        points = zoneData.filter((point: any) => 
+          point.species && topSpeciesNames.includes(point.species.toLowerCase())
+        );
+      }
+      
+      // Convert zone points to log-like format for rendering
+      return points.map((point: any, index) => {
+        // Species is already attached to point from loadZoneData
+        const species = point.species || 'Unknown';
+        
+        return {
+          id: `zone-${index}-${point.latitude}-${point.longitude}`,
+          species,
+          description: null,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          timestamp: point.timestamp ? new Date(point.timestamp) : new Date(),
+          journal_id: '',
+        };
+      });
+    } else {
+      // Filter user's logs
+      const logsWithLocations = userLogs.filter(log =>
+        log.latitude && log.longitude
+      );
+      
+      // If a specific species is selected, filter by that
+      if (selectedSpecies) {
+        return logsWithLocations.filter(log =>
+          log.species && log.species.toLowerCase() === selectedSpecies.toLowerCase()
+        );
+      }
+      
+      // If we have top species, prioritize showing those, but also show others
+      if (topSpecies.length > 0) {
+        const topSpeciesNames = topSpecies.map(s => s.species.toLowerCase());
+        
+        // Get logs that match top 3 species
+        const topSpeciesLogs = logsWithLocations.filter(log =>
+          log.species && topSpeciesNames.includes(log.species.toLowerCase())
+        );
+        
+        // If we found matches, return them; otherwise show all logs
+        return topSpeciesLogs.length > 0 ? topSpeciesLogs : logsWithLocations;
+      }
+      
+      // If no top species calculated yet, show all logs with locations
+      return logsWithLocations;
+    }
+  }, [selectedSpecies, userLogs, topSpecies, dataView, zoneData, zones]);
 
   // Get available species for dropdown (memoized)
   const availableSpecies = useMemo(() => {
     const speciesMap = new Map<string, number>();
-    redditSightings.forEach(sighting => {
-      sighting.species?.forEach(species => {
-        const count = speciesMap.get(species) || 0;
-        speciesMap.set(species, count + 1);
-      });
+    userLogs.forEach(log => {
+      if (log.species) {
+        const count = speciesMap.get(log.species) || 0;
+        speciesMap.set(log.species, count + 1);
+      }
     });
     return Array.from(speciesMap.entries())
       .map(([species, count]) => ({ species, count }))
       .sort((a, b) => b.count - a.count);
-  }, [redditSightings]);
+  }, [userLogs]);
 
   // Memoize initial region to prevent re-renders
   const initialRegion = useMemo(() => {
@@ -191,16 +352,11 @@ function MapScreen() {
     };
   }, [userLocation]);
 
-  const openRedditPost = (url: string) => {
-    Linking.openURL(url).catch(err => console.error('Error opening Reddit link:', err));
-  };
-
-  const formatTimeAgo = (timestamp: string | undefined) => {
+  const formatTimeAgo = (timestamp: Date) => {
     if (!timestamp) return 'Date unknown';
     try {
-      const date = new Date(timestamp);
       const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
+      const diffMs = now.getTime() - timestamp.getTime();
       const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
       
       if (diffDays === 0) return 'Today';
@@ -247,162 +403,64 @@ function MapScreen() {
             </Marker>
           )}
 
-          {/* Markers for filtered sightings - only show when World Data is selected */}
-          {dataView === 'world-data' && filteredSightings.map((sighting) => {
-            if (!sighting.latitude || !sighting.longitude) return null;
-
+          {/* Markers for user's logs */}
+          {filteredLogs.map((log) => {
+            if (!log.latitude || !log.longitude) return null;
+            
+            // Get unique icon for this species
+            const iconInfo = getSpeciesIcon(log.species);
+            
             return (
               <Marker
-                key={sighting.id}
+                key={log.id}
                 coordinate={{
-                  latitude: sighting.latitude,
-                  longitude: sighting.longitude,
+                  latitude: log.latitude,
+                  longitude: log.longitude,
                 }}
-                onPress={() => openRedditPost(sighting.reddit_url)}
               >
                 <View style={styles.markerContainer}>
-                  <Ionicons name="location" size={32} color="#FF6B6B" />
-                  {sighting.species && sighting.species.length > 0 && (
-                    <View style={styles.markerBadge}>
-                      <Text style={styles.markerBadgeText}>
-                        {sighting.species.length}
-                      </Text>
-                    </View>
-                  )}
+                  <View style={[styles.speciesMarker, { backgroundColor: `${iconInfo.color}20` }]}>
+                    <Ionicons name={iconInfo.name} size={28} color={iconInfo.color} />
+                  </View>
                 </View>
               </Marker>
             );
           })}
-
-          {/* Zone Boundaries (Polygons) - shown on World Data view */}
-          {dataView === 'world-data' && zonesData && Object.values(zonesData.zones).map((zone, index) => {
-            // Filter by selected species if one is selected
-            if (selectedSpecies && zone.species !== selectedSpecies) return null;
-
-            const color = getSpeciesColor(zone.species, index);
-
-            return (
-              <Polygon
-                key={`zone-boundary-${zone.zone_id}`}
-                coordinates={zone.boundary}
-                strokeColor={color}
-                fillColor={`${color}33`}  // 20% opacity
-                strokeWidth={2}
-                tappable={true}
-                onPress={() => {
-                  setSelectedZone(zone);
-                  setZonePopupVisible(true);
-                }}
-              />
-            );
-          })}
-
-          {/* Individual GPS Points - only for field researchers on World Data view */}
-          {dataView === 'world-data' && zonesData && userRole === 'field_researcher' &&
-            Object.values(zonesData.zones).map((zone, zoneIndex) => {
-              // Filter by selected species if one is selected
-              if (selectedSpecies && zone.species !== selectedSpecies) return null;
-              if (!zone.individual_points) return null;
-
-              const color = getSpeciesColor(zone.species, zoneIndex);
-
-              return zone.individual_points.map((point, pointIndex) => (
-                <Marker
-                  key={`zone-${zone.zone_id}-point-${pointIndex}`}
-                  coordinate={{
-                    latitude: point.latitude,
-                    longitude: point.longitude,
-                  }}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                >
-                  <View style={[styles.zonePointMarker, { backgroundColor: color }]} />
-                </Marker>
-              ));
-            })
-          }
-
-          {/* Zone Centers - only for field researchers on World Data view */}
-          {dataView === 'world-data' && zonesData && userRole === 'field_researcher' &&
-            Object.values(zonesData.zones).map((zone, index) => {
-              if (selectedSpecies && zone.species !== selectedSpecies) return null;
-              if (!zone.center) return null;
-
-              const color = getSpeciesColor(zone.species, index);
-
-              return (
-                <Marker
-                  key={`zone-center-${zone.zone_id}`}
-                  coordinate={{
-                    latitude: zone.center.latitude,
-                    longitude: zone.center.longitude,
-                  }}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                >
-                  <View style={[styles.zoneCenterMarker, { borderColor: color }]}>
-                    <Text style={[styles.zoneCenterText, { color }]}>
-                      {zone.point_count || '?'}
-                    </Text>
-                  </View>
-                </Marker>
-              );
-            })
-          }
         </MapView>
 
         {/* Loading/Error Overlay */}
-        {loading && (
+        {(loading || loadingZones) && (
           <View style={styles.overlay}>
             <ActivityIndicator size="large" color="#007AFF" />
-            <Text style={styles.overlayText}>Loading sightings...</Text>
+            <Text style={styles.overlayText}>
+              {dataView === 'world-data' ? 'Loading zone data...' : 'Loading logs...'}
+            </Text>
           </View>
         )}
         
-        {error && !loading && (
+        {error && !loading && !loadingZones && (
           <View style={styles.overlay}>
             <Ionicons name="alert-circle" size={48} color="#FF6B6B" />
             <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
 
-        {!loading && !error && dataView === 'world-data' && filteredSightings.length === 0 && !zonesData && !zonesLoading && (
+        {!loading && !loadingZones && !error && filteredLogs.length === 0 && (
           <View style={styles.overlay}>
             <Ionicons name="map-outline" size={48} color="#999" />
             <Text style={styles.emptyText}>
-              {selectedSpecies
-                ? `No ${selectedSpecies} sightings with locations found`
-                : 'No sightings with locations found'}
+              {dataView === 'world-data' 
+                ? selectedSpecies 
+                  ? `No ${selectedSpecies} sightings found in zone data`
+                  : 'No zone data available. Check backend connection.'
+                : selectedSpecies 
+                  ? `No ${selectedSpecies} logs with locations found`
+                  : userLogs.length === 0
+                  ? 'No logs found. Create a log in the Home page to see it on the map.'
+                  : userLogs.filter(log => log.latitude && log.longitude).length === 0
+                  ? 'You have logs but none have location coordinates. Logs created with GPS will appear here.'
+                  : 'No logs match the current filter'}
             </Text>
-          </View>
-        )}
-
-        {/* Zones Loading - show on World Data view too */}
-        {dataView === 'world-data' && zonesLoading && (
-          <View style={[styles.overlay, { backgroundColor: 'rgba(255, 255, 255, 0.7)' }]}>
-            <ActivityIndicator size="large" color="#007AFF" />
-            <Text style={styles.overlayText}>Loading zones...</Text>
-          </View>
-        )}
-
-        {/* Zones Loading/Error - for My Data view */}
-        {dataView === 'my-data' && zonesLoading && (
-          <View style={styles.overlay}>
-            <ActivityIndicator size="large" color="#007AFF" />
-            <Text style={styles.overlayText}>Loading zones...</Text>
-          </View>
-        )}
-
-        {dataView === 'my-data' && zonesError && !zonesLoading && (
-          <View style={styles.overlay}>
-            <Ionicons name="alert-circle" size={48} color="#FF6B6B" />
-            <Text style={styles.errorText}>{zonesError}</Text>
-            <Text style={styles.emptyText}>Please login to view zones</Text>
-          </View>
-        )}
-
-        {dataView === 'my-data' && !zonesLoading && !zonesError && !zonesData && (
-          <View style={styles.overlay}>
-            <Ionicons name="map-outline" size={48} color="#999" />
-            <Text style={styles.emptyText}>No zone data available</Text>
           </View>
         )}
       </View>
@@ -506,7 +564,7 @@ function MapScreen() {
           {selectedSpecies && (
             <View style={styles.filterBanner}>
               <Text style={styles.filterBannerText}>
-                Showing {filteredSightings.length} {selectedSpecies} sighting{filteredSightings.length !== 1 ? 's' : ''} on map
+                Showing {filteredLogs.length} {selectedSpecies} log{filteredLogs.length !== 1 ? 's' : ''} on map
               </Text>
             </View>
           )}
@@ -541,14 +599,14 @@ function MapScreen() {
                 }}
               >
                 <Text style={[styles.dropdownItemText, !selectedSpecies && styles.dropdownItemTextActive]}>
-                  All Species ({filteredSightings.length})
+                  All Species ({filteredLogs.length})
                 </Text>
                 {!selectedSpecies && <Ionicons name="checkmark" size={20} color="#007AFF" />}
               </TouchableOpacity>
               {topSpecies.map(({ species, count }) => {
-                const locationCount = redditSightings.filter(s =>
-                  s.species?.some(sp => sp.toLowerCase() === species.toLowerCase()) &&
-                  s.latitude && s.longitude
+                const locationCount = userLogs.filter(log =>
+                  log.species && log.species.toLowerCase() === species.toLowerCase() &&
+                  log.latitude && log.longitude
                 ).length;
                 
                 return (
@@ -568,63 +626,6 @@ function MapScreen() {
                 );
               })}
             </ScrollView>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Zone Info Popup Modal */}
-      <Modal
-        visible={zonePopupVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setZonePopupVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setZonePopupVisible(false)}
-        >
-          <View style={styles.zonePopup} onStartShouldSetResponder={() => true}>
-            {selectedZone && (
-              <>
-                <View style={styles.zonePopupHeader}>
-                  <Ionicons name="paw" size={28} color="#FF6B6B" />
-                  <Text style={styles.zonePopupTitle}>{selectedZone.species}</Text>
-                  <TouchableOpacity onPress={() => setZonePopupVisible(false)}>
-                    <Ionicons name="close" size={24} color="#333" />
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.zonePopupContent}>
-                  <View style={styles.zonePopupRow}>
-                    <Ionicons name="eye-outline" size={20} color="#666" />
-                    <Text style={styles.zonePopupLabel}>Sightings in zone:</Text>
-                    <Text style={styles.zonePopupValue}>
-                      {selectedZone.point_count || selectedZone.boundary?.length || 'N/A'}
-                    </Text>
-                  </View>
-                  <View style={styles.zonePopupRow}>
-                    <Ionicons name="navigate-outline" size={20} color="#666" />
-                    <Text style={styles.zonePopupLabel}>Zone ID:</Text>
-                    <Text style={styles.zonePopupValue}>#{selectedZone.zone_id}</Text>
-                  </View>
-                  {selectedZone.center && (
-                    <View style={styles.zonePopupRow}>
-                      <Ionicons name="location-outline" size={20} color="#666" />
-                      <Text style={styles.zonePopupLabel}>Center:</Text>
-                      <Text style={styles.zonePopupValue}>
-                        {selectedZone.center.latitude.toFixed(4)}, {selectedZone.center.longitude.toFixed(4)}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <TouchableOpacity
-                  style={styles.zonePopupButton}
-                  onPress={() => setZonePopupVisible(false)}
-                >
-                  <Text style={styles.zonePopupButtonText}>Close</Text>
-                </TouchableOpacity>
-              </>
-            )}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -697,11 +698,26 @@ const styles = StyleSheet.create({
   markerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  speciesMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
   },
   markerBadge: {
     position: 'absolute',
-    top: -4,
-    right: -8,
+    top: -6,
+    right: -10,
     backgroundColor: '#FF6B6B',
     borderRadius: 10,
     minWidth: 20,
@@ -709,6 +725,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   markerBadgeText: {
     color: '#fff',
@@ -737,18 +755,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff',
-    paddingVertical: 14,
+    gap: 8,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: '#007AFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-    gap: 8,
+    backgroundColor: '#fff',
   },
   dataButtonActive: {
     backgroundColor: '#007AFF',
@@ -924,89 +937,22 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontWeight: '600',
   },
-  // Zone marker styles
-  zonePointMarker: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#fff',
-  },
-  zoneCenterMarker: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#fff',
-    borderWidth: 3,
+  refreshButton: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
-    elevation: 5,
+    elevation: 3,
   },
-  zoneCenterText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  // Zone popup styles
-  zonePopup: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    width: '85%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-    overflow: 'hidden',
-  },
-  zonePopupHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    backgroundColor: '#F8F9FA',
-    gap: 12,
-  },
-  zonePopupTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  zonePopupContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    gap: 12,
-  },
-  zonePopupRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  zonePopupLabel: {
-    flex: 1,
-    fontSize: 14,
-    color: '#666',
-  },
-  zonePopupValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  zonePopupButton: {
-    backgroundColor: '#007AFF',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  zonePopupButtonText: {
+  refreshButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',

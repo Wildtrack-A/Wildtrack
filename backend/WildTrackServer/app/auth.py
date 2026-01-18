@@ -15,22 +15,37 @@ security = HTTPBearer()
 
 # Cache for Auth0 JWKS
 _jwks_cache = None
+_cached_domain = None  # Track which domain was used for caching
+
+
+def clear_jwks_cache():
+    """Clear the JWKS cache. Useful when Auth0 domain changes."""
+    global _jwks_cache, _cached_domain
+    _jwks_cache = None
+    _cached_domain = None
 
 
 def get_auth0_jwks():
     """Get Auth0 JSON Web Key Set (JWKS) for token validation."""
-    global _jwks_cache
+    global _jwks_cache, _cached_domain
     if not settings.auth0_domain:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Auth0 domain not configured"
         )
+    
+    # Clear cache if domain changed
+    if _cached_domain and _cached_domain != settings.auth0_domain:
+        _jwks_cache = None
+        _cached_domain = None
+    
     if _jwks_cache is None:
         jwks_url = f"https://{settings.auth0_domain}/.well-known/jwks.json"
         try:
             response = httpx.get(jwks_url, timeout=5.0)
             response.raise_for_status()
             _jwks_cache = response.json()
+            _cached_domain = settings.auth0_domain
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

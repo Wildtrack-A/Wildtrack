@@ -36,8 +36,19 @@ async def get_all_zones(
     - Citizens: Get only boundaries for every zone
     """
     try:
-        # Load zones model
-        zones = load_zones('app/models/wildtrack_zones_dbscan.pkl')
+        # Load zones model - check if file exists first
+        zones_file = 'app/models/wildtrack_zones_dbscan.pkl'
+        import os
+        if not os.path.exists(zones_file):
+            # If zones file doesn't exist, return empty zones
+            return {
+                "role": "public",
+                "total_zones": 0,
+                "unique_species": [],
+                "zones": {}
+            }
+        
+        zones = load_zones(zones_file)
 
         
         # Check user role

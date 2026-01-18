@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
 
 router = APIRouter()
 
-# In-memory rate limiting: track last scrape time per IP
+# Rate limiting disabled for development
 # In production, use Redis or database for distributed systems
-_last_scrape_times: Dict[str, datetime] = {}
-RATE_LIMIT_HOURS = 1
+# _last_scrape_times: Dict[str, datetime] = {}
+# RATE_LIMIT_HOURS = 1
 
 
 @router.get("/reddit-sightings", response_model=List[RedditSighting], status_code=status.HTTP_200_OK)
@@ -250,37 +250,15 @@ async def trigger_scraper(request: Request, background_tasks: BackgroundTasks):
     """
     Trigger Reddit scraper to fetch new wildlife sightings.
     
-    Rate limited to once per hour per IP address.
+    Rate limiting disabled for development.
     This endpoint runs the scraper in the background and returns immediately.
     The scraper will fetch posts from wildlife subreddits and save them to the database.
     
     Returns:
-        Message confirming the scraper has been started, or rate limit error
+        Message confirming the scraper has been started
     """
-    # Get client IP for rate limiting
-    client_ip = request.client.host if request.client else "unknown"
-    
-    # Check rate limit
-    now = datetime.utcnow()
-    last_scrape = _last_scrape_times.get(client_ip)
-    
-    if last_scrape:
-        time_since_last = now - last_scrape
-        hours_since_last = time_since_last.total_seconds() / 3600
-        
-        if hours_since_last < RATE_LIMIT_HOURS:
-            minutes_remaining = int((RATE_LIMIT_HOURS - hours_since_last) * 60)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
-                    "message": f"Rate limit exceeded. Please wait {minutes_remaining} more minutes before refreshing again.",
-                    "retry_after_minutes": minutes_remaining,
-                    "rate_limit_hours": RATE_LIMIT_HOURS
-                }
-            )
-    
-    # Update last scrape time
-    _last_scrape_times[client_ip] = now
+    # Rate limiting disabled - removed for development
+    # In production, re-enable rate limiting to prevent abuse
     
     # Add the scraper task to run in the background
     background_tasks.add_task(run_scraper_background)
@@ -288,5 +266,5 @@ async def trigger_scraper(request: Request, background_tasks: BackgroundTasks):
     return {
         "message": "Reddit scraper started in background",
         "status": "processing",
-        "note": "New sightings will appear in the database when complete. You can refresh again in 1 hour."
+        "note": "New sightings will appear in the database when complete."
     }

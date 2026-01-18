@@ -17,7 +17,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { journalAPI, logAPI } from '../services/api';
+import { journalAPI, logAPI, imageVerificationAPI } from '../services/api';
 
 interface AnimalLog {
   id: string;
@@ -255,6 +255,23 @@ export default function Home() {
       return;
     }
 
+    // Verify image if one was uploaded
+    if (photoUri) {
+      try {
+        const verification = await imageVerificationAPI.verifyImage(photoUri);
+        if (!verification.is_real) {
+          Alert.alert('Invalid Image', 'Please upload real images');
+          return;
+        }
+      } catch (error: any) {
+        console.error('Error verifying image:', error);
+        // If verification fails, we'll still allow the image (fail open)
+        // You can change this to fail closed if preferred
+        Alert.alert('Verification Error', 'Could not verify image. Please try again.');
+        return;
+      }
+    }
+
     // Use current location if available, otherwise try to get fresh location
     let location = currentLocation;
     if (!location) {
@@ -300,8 +317,23 @@ export default function Home() {
       setShowLogModal(false);
       Alert.alert('Success', 'Log entry saved!');
     } catch (error: any) {
-      Alert.alert('Error', `Failed to save log: ${error.message}`);
       console.error('Error saving log:', error);
+      // Extract more detailed error message
+      let errorMessage = 'Failed to save log';
+      if (error.message) {
+        errorMessage = error.message;
+      } else if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      
+      Alert.alert(
+        'Error Saving Log',
+        errorMessage,
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
     }
   };
 

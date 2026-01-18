@@ -423,7 +423,53 @@ export const redditSightingsAPI = {
   },
 };
 
-// Zone Types
+// Image Verification API
+export const imageVerificationAPI = {
+  /**
+   * Verify if an uploaded image is real or AI-generated.
+   * @param imageUri - Local file URI (e.g., from ImagePicker)
+   * @returns Promise with verification result
+   */
+  async verifyImage(imageUri: string): Promise<{ is_real: boolean; confidence: number; message: string }> {
+    try {
+      // Create FormData for React Native
+      const formData = new FormData();
+      
+      // Extract filename from URI or use default
+      const filename = imageUri.split('/').pop() || 'image.jpg';
+      const fileExtension = filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const mimeType = fileExtension === 'png' ? 'image/png' : 'image/jpeg';
+      
+      // Append file in React Native format
+      formData.append('file', {
+        uri: imageUri,
+        type: mimeType,
+        name: filename,
+      } as any);
+      
+      // Send to backend
+      const verifyResponse = await fetch(`${API_BASE_URL}/verify-image`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          // Don't set Content-Type - let fetch set it with boundary for FormData
+        },
+      });
+      
+      if (!verifyResponse.ok) {
+        const error = await verifyResponse.json().catch(() => ({ detail: 'Failed to verify image' }));
+        throw new Error(error.detail || 'Failed to verify image');
+      }
+      
+      return await verifyResponse.json();
+    } catch (error: any) {
+      console.error('Error verifying image:', error);
+      throw new Error(error.message || 'Failed to verify image');
+    }
+  },
+};
+
+// Zone Types (from zone-integration branch)
 export interface ZoneBoundaryPoint {
   latitude: number;
   longitude: number;
@@ -451,7 +497,7 @@ export interface ZonesResponse {
   zones: Record<string, Zone>;
 }
 
-// Zones API calls
+// Zones API calls (from zone-integration branch)
 export const zonesAPI = {
   // Get all zones (returns different data based on user role)
   // Falls back to public test endpoint if not authenticated

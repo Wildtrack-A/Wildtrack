@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { View, StyleSheet, Text, ScrollView, TouchableOpacity, ActivityIndicator, Linking, RefreshControl, Modal } from 'react-native';
+import { useState, useEffect, useMemo } from 'react';
+import { View, StyleSheet, Text, ScrollView, TouchableOpacity, ActivityIndicator, Linking, RefreshControl, Modal, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { redditSightingsAPI, RedditSighting } from '../services/api';
@@ -24,6 +24,7 @@ export default function Analytics() {
   const [selectedSpecies, setSelectedSpecies] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [dropdownVisible, setDropdownVisible] = useState(false);
+  const [scraping, setScraping] = useState(false);
 
   useEffect(() => {
     loadPosts();
@@ -51,8 +52,12 @@ export default function Analytics() {
         limit: 100,
         days: 30,
       });
+      console.log(`✅ Loaded ${sightings.length} Reddit sightings`);
       setPosts(sightings);
       setFilteredPosts(sightings);
+      if (sightings.length === 0) {
+        console.log('⚠️ No Reddit sightings found in database. Use "Scrape Reddit Data" button to fetch headlines.');
+      }
     } catch (error: any) {
       console.error('Error loading posts:', error);
       setError(error.message || 'Failed to load posts');
@@ -94,16 +99,20 @@ export default function Analytics() {
   const getSpeciesCount = () => {
     const speciesMap = new Map<string, number>();
     posts.forEach(post => {
-      post.species?.forEach(species => {
-        const count = speciesMap.get(species) || 0;
-        speciesMap.set(species, count + 1);
-      });
+      if (post.species && Array.isArray(post.species)) {
+        post.species.forEach(species => {
+          if (species) {
+            const count = speciesMap.get(species) || 0;
+            speciesMap.set(species, count + 1);
+          }
+        });
+      }
     });
     return Array.from(speciesMap.entries())
       .sort((a, b) => b[1] - a[1]);
   };
 
-  const availableSpecies = getSpeciesCount();
+  const availableSpecies = useMemo(() => getSpeciesCount(), [posts]);
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
@@ -113,9 +122,68 @@ export default function Analytics() {
           <Text style={styles.headerTitle}>Wildlife Analytics</Text>
           <Text style={styles.headerSubtitle}>Headlines powered by Reddit</Text>
         </View>
-        <TouchableOpacity onPress={handleRefresh} style={styles.refreshButton}>
-          <Ionicons name="refresh" size={24} color="#007AFF" />
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity 
+            onPress={async () => {
+              if (scraping) return;
+              try {
+                setScraping(true);
+                setError(null);
+                await redditSightingsAPI.triggerScrape();
+                Alert.alert(
+                  'Scraper Started',
+                  'Reddit scraper is running in the background. This may take 1-2 minutes. Pull down to refresh when ready.',
+                  [{ text: 'OK' }]
+                );
+                // Poll for new data every 10 seconds for up to 2 minutes
+                let attempts = 0;
+                const maxAttempts = 12;
+                const pollInterval = setInterval(async () => {
+                  attempts++;
+                  try {
+                    const newSightings = await redditSightingsAPI.getSightings({
+                      limit: 100,
+                      days: 30,
+                    });
+                    if (newSightings.length > 0) {
+                      clearInterval(pollInterval);
+                      setPosts(newSightings);
+                      setFilteredPosts(newSightings);
+                      setScraping(false);
+                      Alert.alert('Success', `${newSightings.length} Reddit headlines loaded!`);
+                    } else if (attempts >= maxAttempts) {
+                      clearInterval(pollInterval);
+                      setScraping(false);
+                      Alert.alert(
+                        'Scraping Complete',
+                        'Scraper finished but no new headlines were found. Try again later.'
+                      );
+                    }
+                  } catch (err) {
+                    console.log('Polling error (will retry):', err);
+                  }
+                }, 10000);
+              } catch (err: any) {
+                setError(err.message || 'Failed to trigger scraper');
+                setScraping(false);
+              }
+            }}
+            style={[styles.scrapeHeaderButton, scraping && styles.scrapeHeaderButtonDisabled]}
+            disabled={scraping}
+          >
+            {scraping ? (
+              <ActivityIndicator size="small" color="#007AFF" />
+            ) : (
+              <Ionicons name="download" size={20} color="#007AFF" />
+            )}
+            <Text style={styles.scrapeHeaderButtonText}>
+              {scraping ? 'Scraping...' : 'Scrape'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleRefresh} style={styles.refreshButton}>
+            <Ionicons name="refresh" size={24} color="#007AFF" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Stats Cards */}
@@ -232,6 +300,80 @@ export default function Analytics() {
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
+      ) : posts.length === 0 ? (
+        <View style={styles.centerContainer}>
+          <Ionicons name="newspaper-outline" size={64} color="#999" />
+          <Text style={styles.emptyTitle}>No Reddit Headlines Available</Text>
+          <Text style={styles.emptyText}>
+            No wildlife sightings have been scraped from Reddit yet. Click the button below to scrape Reddit data.
+          </Text>
+          <TouchableOpacity 
+            style={[styles.scrapeButton, scraping && styles.scrapeButtonDisabled]} 
+            onPress={async () => {
+              if (scraping) return;
+              try {
+                setScraping(true);
+                setError(null);
+                setLoading(true);
+                await redditSightingsAPI.triggerScrape();
+                // Show message that scraping has started
+                Alert.alert(
+                  'Scraper Started',
+                  'Reddit scraper is running in the background. This may take 1-2 minutes. The page will automatically refresh when data is available.',
+                  [{ text: 'OK' }]
+                );
+                // Poll for new data every 10 seconds for up to 2 minutes
+                let attempts = 0;
+                const maxAttempts = 12; // 12 * 10 seconds = 2 minutes
+                const pollInterval = setInterval(async () => {
+                  attempts++;
+                  try {
+                    const newSightings = await redditSightingsAPI.getSightings({
+                      limit: 100,
+                      days: 30,
+                    });
+                    if (newSightings.length > 0) {
+                      clearInterval(pollInterval);
+                      setPosts(newSightings);
+                      setFilteredPosts(newSightings);
+                      setLoading(false);
+                      setScraping(false);
+                      Alert.alert('Success', `${newSightings.length} Reddit headlines loaded!`);
+                    } else if (attempts >= maxAttempts) {
+                      clearInterval(pollInterval);
+                      setLoading(false);
+                      setScraping(false);
+                      Alert.alert(
+                        'Scraping Complete',
+                        'Scraper finished but no new headlines were found. Try again later or check the backend logs.'
+                      );
+                    }
+                  } catch (err) {
+                    // Continue polling on error
+                    console.log('Polling error (will retry):', err);
+                  }
+                }, 10000); // Poll every 10 seconds
+              } catch (err: any) {
+                setError(err.message || 'Failed to trigger scraper');
+                setLoading(false);
+                setScraping(false);
+              }
+            }}
+            disabled={scraping}
+          >
+            {scraping ? (
+              <>
+                <ActivityIndicator size="small" color="#fff" />
+                <Text style={styles.scrapeButtonText}>Scraping...</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="refresh" size={20} color="#fff" />
+                <Text style={styles.scrapeButtonText}>Scrape Reddit Data</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
       ) : filteredPosts.length === 0 ? (
         <View style={styles.centerContainer}>
           <Ionicons name="newspaper-outline" size={64} color="#999" />
@@ -241,7 +383,7 @@ export default function Analytics() {
           <Text style={styles.emptyText}>
             {selectedSpecies 
               ? 'Try selecting a different species or clear the filter'
-              : 'Run the scraper to populate data. Check backend logs for instructions.'}
+              : 'No posts match your filter criteria.'}
           </Text>
           {selectedSpecies && (
             <TouchableOpacity 
@@ -356,6 +498,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 2,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  scrapeHeaderButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#E3F2FD',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  scrapeHeaderButtonDisabled: {
+    opacity: 0.6,
+  },
+  scrapeHeaderButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
   },
   refreshButton: {
     padding: 8,
@@ -508,6 +674,7 @@ const styles = StyleSheet.create({
   },
   postsContainer: {
     flex: 1,
+    paddingBottom: 20,
   },
   postCard: {
     backgroundColor: '#fff',
@@ -667,6 +834,25 @@ const styles = StyleSheet.create({
   },
   clearFilterText: {
     color: '#fff',
+    fontWeight: '600',
+  },
+  scrapeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  scrapeButtonDisabled: {
+    opacity: 0.6,
+  },
+  scrapeButtonText: {
+    color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
   },
 });

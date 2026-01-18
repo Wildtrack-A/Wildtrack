@@ -5,7 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from app.api.v1 import ingest, journals, auth, reddit_sightings, zones  
+from app.api.v1 import ingest, journals, auth, reddit_sightings, zones, image_verification  
 
 app = FastAPI(
     title="WildTrack Server",
@@ -33,7 +33,8 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["authentication"])
 app.include_router(ingest.router, prefix="/api/v1", tags=["ingestion"])
 app.include_router(journals.router, prefix="/api/v1", tags=["journals"])
 app.include_router(reddit_sightings.router, prefix="/api/v1", tags=["reddit-sightings"])
-app.include_router(zones.router, prefix="/api/v1", tags=["zones"]) 
+app.include_router(zones.router, prefix="/api/v1", tags=["zones"])
+app.include_router(image_verification.router, prefix="/api/v1", tags=["image-verification"]) 
 
 
 @app.get("/")
