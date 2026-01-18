@@ -161,6 +161,141 @@ export const logAPI = {
   },
 };
 
+// Animal Search API types
+export interface AnimalPhysicalCharacteristics {
+  size?: string;
+  weight?: string;
+  lifespan?: string;
+  appearance?: string;
+}
+
+export interface AnimalHabitat {
+  type?: string;
+  geographic_distribution?: string;
+  habitat_data?: {
+    forest?: number;
+    grassland?: number;
+    desert?: number;
+    aquatic?: number;
+    mountain?: number;
+    urban?: number;
+  };
+}
+
+export interface AnimalDiet {
+  type?: string;
+  primary_food?: string;
+  diet_data?: {
+    carnivore?: number;
+    herbivore?: number;
+    omnivore?: number;
+    insectivore?: number;
+    piscivore?: number;
+  };
+}
+
+export interface AnimalBehavior {
+  social_structure?: string;
+  activity_pattern?: string;
+  notable_behaviors?: string[];
+}
+
+export interface AnimalConservation {
+  status?: string;
+  population_trend?: string;
+  estimated_population?: string;
+  threats?: string[];
+}
+
+export interface AnimalStatistics {
+  speed_kmh?: number;
+  height_cm?: number;
+  weight_kg?: number;
+  lifespan_years?: number;
+}
+
+export interface AnimalSearchResult {
+  animal_name: string;
+  scientific_name?: string;
+  icon_emoji?: string;
+  description?: string;
+  physical_characteristics?: AnimalPhysicalCharacteristics;
+  habitat?: AnimalHabitat;
+  diet?: AnimalDiet;
+  behavior?: AnimalBehavior;
+  conservation?: AnimalConservation;
+  statistics?: AnimalStatistics;
+  interesting_facts?: string[];
+  source: string;
+  // Fallback for old format
+  information?: string;
+}
+
+// Animal Search API calls
+export const searchAPI = {
+  // Search for animal information using Gemini
+  async searchAnimal(animalName: string): Promise<AnimalSearchResult> {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/search-animal?animal_name=${encodeURIComponent(animalName)}`, {
+      method: 'GET',
+      headers,
+    });
+    return handleResponse(response);
+  },
+};
+
+// Alias for convenience
+export async function searchAnimal(animalName: string) {
+  return searchAPI.searchAnimal(animalName);
+}
+
+// Animal Detection API types
+export interface AnimalDetectionResult {
+  species: string;
+  confidence: string;
+  notes?: string;
+  source: string;
+}
+
+// Animal Detection API calls
+export const detectionAPI = {
+  // Detect animal from image using Gemini Vision
+  async detectAnimalFromImage(imageUri: string): Promise<AnimalDetectionResult> {
+    const headers = await getAuthHeaders();
+    
+    // Convert image URI to FormData for upload
+    const formData = new FormData();
+    
+    // Extract filename from URI
+    const filename = imageUri.split('/').pop() || 'photo.jpg';
+    const match = /\.(\w+)$/.exec(filename);
+    const type = match ? `image/${match[1]}` : 'image/jpeg';
+    
+    // @ts-ignore - FormData.append expects different types
+    formData.append('file', {
+      uri: imageUri,
+      name: filename,
+      type: type,
+    } as any);
+    
+    // Remove Content-Type header - React Native will set it automatically with boundary
+    const { 'Content-Type': _, ...headersWithoutContentType } = headers;
+    
+    const response = await fetch(`${API_BASE_URL}/detect-animal-from-image`, {
+      method: 'POST',
+      headers: headersWithoutContentType,
+      body: formData,
+    });
+    
+    return handleResponse(response);
+  },
+};
+
+// Alias for convenience
+export async function detectAnimalFromImage(imageUri: string) {
+  return detectionAPI.detectAnimalFromImage(imageUri);
+}
+
 // Reddit Sightings API calls
 export interface RedditSighting {
   id: string;

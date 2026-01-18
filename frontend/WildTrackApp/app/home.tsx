@@ -7,17 +7,19 @@ import {
   Modal, 
   TextInput, 
   ScrollView, 
-  Image,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator
+  Image, 
+  Alert, 
+  KeyboardAvoidingView, 
+  Platform, 
+  ActivityIndicator,
+  Dimensions
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { journalAPI, logAPI, imageVerificationAPI } from '../services/api';
+import { journalAPI, logAPI, imageVerificationAPI, detectAnimalFromImage, searchAnimal, AnimalSearchResult } from '../services/api';
+import { PieChart, BarChart } from 'react-native-chart-kit';
 
 interface AnimalLog {
   id: string;
@@ -60,6 +62,9 @@ export default function Home() {
   const [locationLoading, setLocationLoading] = useState(false);
   const [imageVerified, setImageVerified] = useState<boolean | null>(null); // null = not checked, true = verified, false = fake
   const [verifyingImage, setVerifyingImage] = useState(false);
+  const [detectingAnimal, setDetectingAnimal] = useState(false);
+  const [showEncyclopediaModal, setShowEncyclopediaModal] = useState(false);
+  const [encyclopediaAnimalName, setEncyclopediaAnimalName] = useState<string>('');
   
   // Edit log state
   const [editSpecies, setEditSpecies] = useState('');
@@ -192,45 +197,114 @@ export default function Home() {
     });
 
     if (!result.canceled && result.assets[0]) {
-      setPhotoUri(result.assets[0].uri);
+      const imageUri = result.assets[0].uri;
+      setPhotoUri(imageUri);
       setImageVerified(null); // Reset verification status when new image is uploaded
-    }
-  };
-
-  const analyzeImageWithAI = async () => {
-    if (!photoUri) {
-      Alert.alert('Error', 'No image to analyze');
-      return;
-    }
-
-    setVerifyingImage(true);
-    try {
-      const verification = await imageVerificationAPI.verifyImage(photoUri);
-      setImageVerified(verification.is_real);
       
-      if (verification.is_real) {
+      // Auto-detect animal from the photo
+      setDetectingAnimal(true);
+      try {
+        const detection = await detectAnimalFromImage(imageUri);
+        
+        // Check if detection indicates it's NOT an animal
+        const isNotAnimal = 
+          detection.species === "No animal detected" ||
+          detection.species === "Unknown" ||
+          detection.confidence === "None" ||
+          (detection.notes && (
+            detection.notes.toLowerCase().includes("not an animal") ||
+            detection.notes.toLowerCase().includes("no animal") ||
+            detection.notes.toLowerCase().includes("not a living creature") ||
+            detection.notes.toLowerCase().includes("object") ||
+            detection.notes.toLowerCase().includes("plant") ||
+            detection.notes.toLowerCase().includes("building") ||
+            detection.notes.toLowerCase().includes("vehicle")
+          ));
+        
+        if (isNotAnimal) {
+          // Invalidate the log - clear photo and species
+          setPhotoUri(null);
+          setSpecies('');
+          Alert.alert(
+            'No Animal Detected ❌',
+            'The image does not contain an animal. Please take a photo of an animal to create a log entry.',
+            [
+              { 
+                text: 'OK', 
+                onPress: () => {
+                  // Photo and species already cleared
+                }
+              }
+            ]
+          );
+        } else if (detection.species && detection.species !== "No animal detected" && detection.species !== "Unknown") {
+          // Valid animal detected - auto-fill the species field
+          setSpecies(detection.species);
+          
+          // Show a brief success message with option to learn more
+          if (detection.confidence === "High" || detection.confidence === "Medium") {
+            Alert.alert(
+              'Animal Detected! 🎯',
+              `Detected: ${detection.species}\nConfidence: ${detection.confidence}\n\nSpecies field has been auto-filled.`,
+              [
+                { text: 'OK' },
+                { 
+                  text: 'Learn More', 
+                  onPress: () => {
+                    const animalToSearch = detection.species;
+                    console.log('Learn More from alert for:', animalToSearch);
+                    setEncyclopediaAnimalName(animalToSearch);
+                    setTimeout(() => {
+                      setShowEncyclopediaModal(true);
+                    }, 100);
+                  }
+                }
+              ]
+            );
+          } else {
+            Alert.alert(
+              'Animal Detected',
+              `Detected: ${detection.species}\nConfidence: ${detection.confidence}\n\nPlease verify the species name.`,
+              [
+                { text: 'OK' },
+                { 
+                  text: 'Learn More', 
+                  onPress: () => {
+                    const animalToSearch = detection.species;
+                    console.log('Learn More from alert for:', animalToSearch);
+                    setEncyclopediaAnimalName(animalToSearch);
+                    setTimeout(() => {
+                      setShowEncyclopediaModal(true);
+                    }, 100);
+                  }
+                }
+              ]
+            );
+          }
+        } else {
+          // Ambiguous detection - clear photo and species, ask user to verify
+          setPhotoUri(null);
+          setSpecies('');
+          Alert.alert(
+            'Detection Unclear ⚠️',
+            'Could not clearly identify an animal in this image. Please take a clearer photo of an animal.',
+            [{ text: 'OK' }]
+          );
+        }
+      } catch (error: any) {
+        console.error('Error detecting animal:', error);
+        // On error, clear photo and species to prevent invalid logs
+        setPhotoUri(null);
+        setSpecies('');
         Alert.alert(
-          'Image Verified',
-          `Image is verified as real (confidence: ${(verification.confidence * 100).toFixed(1)}%)`,
+          'Detection Failed',
+          'Failed to detect an animal in the image. Please take another photo or enter the species manually.',
           [{ text: 'OK' }]
         );
-      } else {
-        Alert.alert(
-          'Image Not Verified',
-          `This image appears to be AI-generated or fake (confidence: ${(verification.confidence * 100).toFixed(1)}%). Please upload a real image.`,
-          [{ text: 'OK' }]
-        );
+      } finally {
+        setDetectingAnimal(false);
       }
-    } catch (error: any) {
-      console.error('Error verifying image:', error);
-      Alert.alert(
-        'Verification Error',
-        'Could not verify image. Please try again.',
-        [{ text: 'OK' }]
-      );
-      setImageVerified(null);
-    } finally {
-      setVerifyingImage(false);
+>>>>>>> origin/Final
     }
   };
 
@@ -291,6 +365,30 @@ export default function Home() {
   const saveLog = async () => {
     if (!species.trim()) {
       Alert.alert('Error', 'Please enter a species name');
+      return;
+    }
+
+    // Validate that species is not an invalid detection result
+    const invalidSpecies = [
+      "No animal detected",
+      "Unknown",
+      "Not an animal",
+      "No animal",
+      "Not a living creature"
+    ];
+    
+    if (invalidSpecies.some(invalid => species.toLowerCase().includes(invalid.toLowerCase()))) {
+      Alert.alert(
+        'Invalid Species ❌',
+        'The detected species is not valid. Please enter a valid animal species name or take a new photo.',
+        [{ 
+          text: 'OK',
+          onPress: () => {
+            setSpecies('');
+            setPhotoUri(null);
+          }
+        }]
+      );
       return;
     }
 
@@ -386,7 +484,26 @@ export default function Home() {
       setCurrentLocation(null);
       setImageVerified(null);
       setShowLogModal(false);
-      Alert.alert('Success', 'Log entry saved!');
+      
+      // Show success with option to learn more
+      Alert.alert(
+        'Success', 
+        'Log entry saved!',
+        [
+          { text: 'OK' },
+          { 
+            text: 'Learn More', 
+            onPress: () => {
+              const animalToSearch = backendLog.species;
+              console.log('Learn More from save alert for:', animalToSearch);
+              setEncyclopediaAnimalName(animalToSearch);
+              setTimeout(() => {
+                setShowEncyclopediaModal(true);
+              }, 100);
+            }
+          }
+        ]
+      );
     } catch (error: any) {
       console.error('Error saving log:', error);
       
@@ -833,8 +950,17 @@ export default function Home() {
                   )}
 
                   {/* Photo Section */}
-                  <TouchableOpacity style={styles.photoButton} onPress={takePicture}>
-                    {photoUri ? (
+                  <TouchableOpacity 
+                    style={[styles.photoButton, detectingAnimal && styles.photoButtonDisabled]} 
+                    onPress={takePicture}
+                    disabled={detectingAnimal}
+                  >
+                    {detectingAnimal ? (
+                      <View style={styles.photoPlaceholder}>
+                        <ActivityIndicator size="large" color="#007AFF" />
+                        <Text style={styles.photoPlaceholderText}>Detecting Animal...</Text>
+                      </View>
+                    ) : photoUri ? (
                       <Image source={{ uri: photoUri }} style={styles.photoPreview} />
                     ) : (
                       <View style={styles.photoPlaceholder}>
@@ -881,20 +1007,22 @@ export default function Home() {
                   )}
 
                   {/* FIELD 1: Species Name */}
-                  <View style={styles.inputContainer}>
-                    <Ionicons name="paw-outline" size={20} color="#666" style={styles.inputIcon} />
-                    <TextInput
-                      key="species-input"
-                      style={styles.inputField}
-                      placeholder="enter species name"
-                      placeholderTextColor="#999"
-                      value={species}
-                      onChangeText={setSpecies}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      blurOnSubmit={true}
-                      returnKeyType="next"
-                    />
+                  <View>
+                    <View style={styles.inputContainer}>
+                      <Ionicons name="paw-outline" size={20} color="#666" style={styles.inputIcon} />
+                      <TextInput
+                        key="species-input"
+                        style={styles.inputField}
+                        placeholder="enter species name"
+                        placeholderTextColor="#999"
+                        value={species}
+                        onChangeText={setSpecies}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        blurOnSubmit={true}
+                        returnKeyType="next"
+                      />
+                    </View>
                   </View>
                   
                   {/* FIELD 2: Description */}
@@ -1049,10 +1177,12 @@ export default function Home() {
                         />
                       </View>
                     ) : (
-                      <View style={styles.logDetailValueContainer}>
-                        <Text style={styles.logDetailValue}>
-                          {selectedLog?.species || 'Not specified'}
-                        </Text>
+                      <View>
+                        <View style={styles.logDetailValueContainer}>
+                          <Text style={styles.logDetailValue}>
+                            {selectedLog?.species || 'Not specified'}
+                          </Text>
+                        </View>
                       </View>
                     )}
                   </View>
@@ -1150,7 +1280,322 @@ export default function Home() {
           </TouchableOpacity>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Encyclopedia Modal */}
+      <Modal
+        visible={showEncyclopediaModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowEncyclopediaModal(false);
+          setEncyclopediaAnimalName('');
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.encyclopediaModalOverlay}
+        >
+          <TouchableOpacity
+            style={styles.encyclopediaModalOverlay}
+            activeOpacity={1}
+            onPress={() => {
+              setShowEncyclopediaModal(false);
+              setEncyclopediaAnimalName('');
+            }}
+          >
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.encyclopediaModalContent}>
+                <View style={styles.encyclopediaModalHeader}>
+                  <Text style={styles.encyclopediaModalTitle}>Animal Encyclopedia</Text>
+                  <TouchableOpacity onPress={() => {
+                    setShowEncyclopediaModal(false);
+                    setEncyclopediaAnimalName('');
+                  }}>
+                    <Ionicons name="close" size={28} color="#333" />
+                  </TouchableOpacity>
+                </View>
+                <EncyclopediaContent 
+                  key={encyclopediaAnimalName} 
+                  animalName={encyclopediaAnimalName || ''} 
+                />
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
+  );
+}
+
+// Encyclopedia Content Component
+function EncyclopediaContent({ animalName }: { animalName: string }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<AnimalSearchResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const screenWidth = Dimensions.get('window').width;
+
+  useEffect(() => {
+    console.log('EncyclopediaContent: animalName changed to:', animalName);
+    if (animalName && animalName.trim()) {
+      console.log('EncyclopediaContent: Loading info for:', animalName);
+      loadAnimalInfo();
+    } else {
+      // Reset when animalName is cleared
+      setResult(null);
+      setError(null);
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animalName]);
+
+  const loadAnimalInfo = async () => {
+    if (!animalName.trim()) return;
+
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const data = await searchAnimal(animalName.trim());
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load animal information');
+      console.error('Animal search error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Helper functions (simplified versions)
+  const getHabitatColor = (habitat: string): string => {
+    const colors: { [key: string]: string } = {
+      forest: '#228B22',
+      grassland: '#9ACD32',
+      desert: '#F4A460',
+      aquatic: '#1E90FF',
+      mountain: '#8B7355',
+      urban: '#808080',
+    };
+    return colors[habitat.toLowerCase()] || '#007AFF';
+  };
+
+  const getDietColor = (diet: string): string => {
+    const colors: { [key: string]: string } = {
+      carnivore: '#DC143C',
+      herbivore: '#32CD32',
+      omnivore: '#FFA500',
+      insectivore: '#FFD700',
+      piscivore: '#00CED1',
+    };
+    return colors[diet.toLowerCase()] || '#007AFF';
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.encyclopediaLoadingContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.encyclopediaLoadingText}>Loading information about {animalName}...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.encyclopediaErrorContainer}>
+        <Ionicons name="alert-circle-outline" size={48} color="#ff3b30" />
+        <Text style={styles.encyclopediaErrorText}>{error}</Text>
+      </View>
+    );
+  }
+
+  if (!result) {
+    return (
+      <View style={styles.encyclopediaPlaceholder}>
+        <Ionicons name="book-outline" size={48} color="#ccc" />
+        <Text style={styles.encyclopediaPlaceholderText}>Searching for {animalName}...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView 
+      style={styles.encyclopediaScrollView}
+      contentContainerStyle={styles.encyclopediaContent}
+      showsVerticalScrollIndicator={true}
+    >
+      {/* Header */}
+      <View style={styles.encyclopediaHeader}>
+        <View style={styles.encyclopediaIconContainer}>
+          {result.icon_emoji ? (
+            <Text style={styles.encyclopediaEmojiIcon}>{result.icon_emoji}</Text>
+          ) : (
+            <Ionicons name="paw" size={24} color="#007AFF" />
+          )}
+        </View>
+        <View style={styles.encyclopediaTitleContainer}>
+          <Text style={styles.encyclopediaTitle}>{result.animal_name}</Text>
+          {result.scientific_name && (
+            <Text style={styles.encyclopediaScientificName}>{result.scientific_name}</Text>
+          )}
+        </View>
+      </View>
+      
+      <View style={styles.encyclopediaDivider} />
+      
+      {/* Description */}
+      {result.description && (
+        <View style={styles.encyclopediaSection}>
+          <Text style={styles.encyclopediaSectionTitle}>Description</Text>
+          <Text style={styles.encyclopediaText}>{result.description}</Text>
+        </View>
+      )}
+      
+      {/* Physical Characteristics */}
+      {result.physical_characteristics && (
+        <View style={styles.encyclopediaSection}>
+          <Text style={styles.encyclopediaSectionTitle}>Physical Characteristics</Text>
+          {result.physical_characteristics.size && (
+            <View style={styles.encyclopediaInfoRow}>
+              <Ionicons name="resize-outline" size={16} color="#666" />
+              <Text style={styles.encyclopediaInfoText}><Text style={styles.encyclopediaInfoLabel}>Size: </Text>{result.physical_characteristics.size}</Text>
+            </View>
+          )}
+          {result.physical_characteristics.weight && (
+            <View style={styles.encyclopediaInfoRow}>
+              <Ionicons name="scale-outline" size={16} color="#666" />
+              <Text style={styles.encyclopediaInfoText}><Text style={styles.encyclopediaInfoLabel}>Weight: </Text>{result.physical_characteristics.weight}</Text>
+            </View>
+          )}
+          {result.physical_characteristics.lifespan && (
+            <View style={styles.encyclopediaInfoRow}>
+              <Ionicons name="time-outline" size={16} color="#666" />
+              <Text style={styles.encyclopediaInfoText}><Text style={styles.encyclopediaInfoLabel}>Lifespan: </Text>{result.physical_characteristics.lifespan}</Text>
+            </View>
+          )}
+        </View>
+      )}
+      
+      {/* Statistics Bar Chart */}
+      {result.statistics && (
+        <View style={styles.encyclopediaSection}>
+          <Text style={styles.encyclopediaSectionTitle}>Statistics</Text>
+          <View style={styles.encyclopediaChartContainer}>
+            <BarChart
+              data={{
+                labels: ['Speed\n(km/h)', 'Height\n(cm)', 'Weight\n(kg)', 'Lifespan\n(years)'],
+                datasets: [{
+                  data: [
+                    result.statistics.speed_kmh || 0,
+                    result.statistics.height_cm || 0,
+                    result.statistics.weight_kg || 0,
+                    result.statistics.lifespan_years || 0,
+                  ]
+                }]
+              }}
+              width={screenWidth - 80}
+              height={220}
+              yAxisLabel=""
+              yAxisSuffix=""
+              chartConfig={{
+                backgroundColor: '#ffffff',
+                backgroundGradientFrom: '#ffffff',
+                backgroundGradientTo: '#ffffff',
+                decimalPlaces: 0,
+                color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
+                labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+                style: {
+                  borderRadius: 16
+                },
+                barPercentage: 0.7,
+              }}
+              style={{
+                marginVertical: 8,
+                borderRadius: 16
+              }}
+              showValuesOnTopOfBars
+              fromZero
+            />
+          </View>
+        </View>
+      )}
+      
+      {/* Habitat Distribution Pie Chart */}
+      {result.habitat?.habitat_data && (
+        <View style={styles.encyclopediaSection}>
+          <Text style={styles.encyclopediaSectionTitle}>Habitat Distribution</Text>
+          {result.habitat.type && (
+            <Text style={styles.encyclopediaSubtitle}>{result.habitat.type}</Text>
+          )}
+          <View style={styles.encyclopediaChartContainer}>
+            <PieChart
+              data={Object.entries(result.habitat.habitat_data)
+                .filter(([_, value]) => value && value > 0)
+                .map(([key, value]) => ({
+                  name: key.charAt(0).toUpperCase() + key.slice(1),
+                  population: value || 0,
+                  color: getHabitatColor(key),
+                  legendFontColor: '#333',
+                  legendFontSize: 12
+                }))}
+              width={screenWidth - 80}
+              height={220}
+              chartConfig={{
+                color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+              }}
+              accessor="population"
+              backgroundColor="transparent"
+              paddingLeft="15"
+              absolute
+            />
+          </View>
+        </View>
+      )}
+      
+      {/* Diet Distribution Pie Chart */}
+      {result.diet?.diet_data && (
+        <View style={styles.encyclopediaSection}>
+          <Text style={styles.encyclopediaSectionTitle}>Diet Type</Text>
+          {result.diet.type && (
+            <Text style={styles.encyclopediaSubtitle}>{result.diet.type}</Text>
+          )}
+          <View style={styles.encyclopediaChartContainer}>
+            <PieChart
+              data={Object.entries(result.diet.diet_data)
+                .filter(([_, value]) => value && value > 0)
+                .map(([key, value]) => ({
+                  name: key.charAt(0).toUpperCase() + key.slice(1),
+                  population: value || 0,
+                  color: getDietColor(key),
+                  legendFontColor: '#333',
+                  legendFontSize: 12
+                }))}
+              width={screenWidth - 80}
+              height={220}
+              chartConfig={{
+                color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+              }}
+              accessor="population"
+              backgroundColor="transparent"
+              paddingLeft="15"
+              absolute
+            />
+          </View>
+        </View>
+      )}
+      
+      {/* Interesting Facts */}
+      {result.interesting_facts && result.interesting_facts.length > 0 && (
+        <View style={styles.encyclopediaSection}>
+          <Text style={styles.encyclopediaSectionTitle}>Interesting Facts</Text>
+          {result.interesting_facts.map((fact, idx) => (
+            <View key={idx} style={styles.encyclopediaFactItem}>
+              <Ionicons name="bulb-outline" size={16} color="#FFD700" />
+              <Text style={styles.encyclopediaFactText}>{fact}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
@@ -1424,6 +1869,9 @@ const styles = StyleSheet.create({
   photoButton: {
     marginBottom: 16,
   },
+  photoButtonDisabled: {
+    opacity: 0.6,
+  },
   photoPreview: {
     width: '100%',
     height: 200,
@@ -1634,5 +2082,217 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  learnMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  learnMoreText: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  learnMoreButtonDetail: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  learnMoreTextDetail: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  encyclopediaModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  encyclopediaModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    width: '100%',
+    height: '100%',
+    maxWidth: '100%',
+    maxHeight: '100%',
+    padding: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+    overflow: 'hidden',
+  },
+  encyclopediaModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingBottom: 16,
+    backgroundColor: '#f8f9fa',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e9ecef',
+  },
+  encyclopediaModalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#212529',
+  },
+  encyclopediaLoadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+  },
+  encyclopediaLoadingText: {
+    fontSize: 16,
+    color: '#212529',
+    marginTop: 16,
+  },
+  encyclopediaErrorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+    paddingHorizontal: 40,
+  },
+  encyclopediaErrorText: {
+    fontSize: 16,
+    color: '#ff3b30',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  encyclopediaPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+  },
+  encyclopediaPlaceholderText: {
+    fontSize: 16,
+    color: '#6c757d',
+    marginTop: 16,
+  },
+  encyclopediaScrollView: {
+    flex: 1,
+  },
+  encyclopediaContent: {
+    padding: 20,
+  },
+  encyclopediaHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  encyclopediaIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#e7f3ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  encyclopediaEmojiIcon: {
+    fontSize: 32,
+  },
+  encyclopediaTitleContainer: {
+    flex: 1,
+  },
+  encyclopediaTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#212529',
+  },
+  encyclopediaScientificName: {
+    fontSize: 14,
+    fontStyle: 'italic',
+    color: '#6c757d',
+    marginTop: 4,
+  },
+  encyclopediaDivider: {
+    height: 1,
+    backgroundColor: '#dee2e6',
+    marginBottom: 16,
+  },
+  encyclopediaSection: {
+    marginBottom: 24,
+  },
+  encyclopediaSectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#212529',
+    marginBottom: 12,
+  },
+  encyclopediaSubtitle: {
+    fontSize: 14,
+    color: '#6c757d',
+    marginBottom: 8,
+  },
+  encyclopediaText: {
+    fontSize: 16,
+    lineHeight: 26,
+    color: '#495057',
+  },
+  encyclopediaInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  encyclopediaInfoText: {
+    fontSize: 15,
+    color: '#495057',
+    marginLeft: 8,
+    flex: 1,
+  },
+  encyclopediaInfoLabel: {
+    fontWeight: '600',
+    color: '#212529',
+  },
+  encyclopediaChartContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+  },
+  encyclopediaFactItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    backgroundColor: '#fff9e6',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FFD700',
+  },
+  encyclopediaFactText: {
+    fontSize: 14,
+    color: '#495057',
+    marginLeft: 8,
+    flex: 1,
   },
 });
