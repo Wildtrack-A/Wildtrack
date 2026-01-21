@@ -18,7 +18,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { journalAPI, logAPI, imageVerificationAPI, detectAnimalFromImage, searchAnimal, AnimalSearchResult } from '../services/api';
+import { journalAPI, logAPI, detectAnimalFromImage, searchAnimal, AnimalSearchResult } from '../services/api';
 import { PieChart, BarChart } from 'react-native-chart-kit';
 
 interface AnimalLog {
@@ -60,8 +60,6 @@ export default function Home() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
-  const [imageVerified, setImageVerified] = useState<boolean | null>(null); // null = not checked, true = verified, false = fake
-  const [verifyingImage, setVerifyingImage] = useState(false);
   const [detectingAnimal, setDetectingAnimal] = useState(false);
   const [showEncyclopediaModal, setShowEncyclopediaModal] = useState(false);
   const [encyclopediaAnimalName, setEncyclopediaAnimalName] = useState<string>('');
@@ -199,7 +197,6 @@ export default function Home() {
     if (!result.canceled && result.assets[0]) {
       const imageUri = result.assets[0].uri;
       setPhotoUri(imageUri);
-      setImageVerified(null); // Reset verification status when new image is uploaded
       
       // Auto-detect animal from the photo
       setDetectingAnimal(true);
@@ -304,43 +301,6 @@ export default function Home() {
       } finally {
         setDetectingAnimal(false);
       }
-    }
-  };
-
-  const analyzeImageWithAI = async () => {
-    if (!photoUri) {
-      Alert.alert('Error', 'No image to analyze');
-      return;
-    }
-
-    setVerifyingImage(true);
-    try {
-      const verification = await imageVerificationAPI.verifyImage(photoUri);
-      setImageVerified(verification.is_real);
-      
-      if (verification.is_real) {
-        Alert.alert(
-          'Image Verified',
-          `Image is verified as real (confidence: ${(verification.confidence * 100).toFixed(1)}%)`,
-          [{ text: 'OK' }]
-        );
-      } else {
-        Alert.alert(
-          'Image Not Verified',
-          `This image appears to be AI-generated or fake (confidence: ${(verification.confidence * 100).toFixed(1)}%). Please upload a real image.`,
-          [{ text: 'OK' }]
-        );
-      }
-    } catch (error: any) {
-      console.error('Error verifying image:', error);
-      Alert.alert(
-        'Verification Error',
-        'Could not verify image. Please try again.',
-        [{ text: 'OK' }]
-      );
-      setImageVerified(null);
-    } finally {
-      setVerifyingImage(false);
     }
   };
 
@@ -456,26 +416,6 @@ export default function Home() {
       return;
     }
 
-    // Check if image needs to be verified
-    if (photoUri) {
-      if (imageVerified === null) {
-        Alert.alert(
-          'Image Not Analyzed',
-          'Please analyze the image with AI before saving the log.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-      if (imageVerified === false) {
-        Alert.alert(
-          'Invalid Image',
-          'The image was detected as fake or AI-generated. Please upload a real image.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-    }
-
     // Use current location if available, otherwise try to get fresh location
     let location = currentLocation;
     if (!location) {
@@ -518,7 +458,6 @@ export default function Home() {
       setDescription('');
       setPhotoUri(null);
       setCurrentLocation(null);
-      setImageVerified(null);
       setShowLogModal(false);
       
       // Show success with option to learn more
@@ -1005,42 +944,6 @@ export default function Home() {
                       </View>
                     )}
                   </TouchableOpacity>
-
-                  {/* Analyze with AI Button - only show if image is uploaded */}
-                  {photoUri && (
-                    <TouchableOpacity
-                      style={[
-                        styles.analyzeButton,
-                        imageVerified === true && styles.analyzeButtonVerified,
-                        imageVerified === false && styles.analyzeButtonFailed,
-                        verifyingImage && styles.analyzeButtonLoading
-                      ]}
-                      onPress={analyzeImageWithAI}
-                      disabled={verifyingImage}
-                    >
-                      {verifyingImage ? (
-                        <>
-                          <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-                          <Text style={styles.analyzeButtonText}>Analyzing...</Text>
-                        </>
-                      ) : imageVerified === true ? (
-                        <>
-                          <Ionicons name="checkmark-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                          <Text style={styles.analyzeButtonText}>Image Verified ✓</Text>
-                        </>
-                      ) : imageVerified === false ? (
-                        <>
-                          <Ionicons name="close-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                          <Text style={styles.analyzeButtonText}>Image Not Verified - Retry</Text>
-                        </>
-                      ) : (
-                        <>
-                          <Ionicons name="sparkles" size={20} color="#fff" style={{ marginRight: 8 }} />
-                          <Text style={styles.analyzeButtonText}>Analyze with AI</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  )}
 
                   {/* FIELD 1: Species Name */}
                   <View>
@@ -1927,37 +1830,6 @@ const styles = StyleSheet.create({
   photoPlaceholderText: {
     marginTop: 8,
     color: '#007AFF',
-    fontWeight: '600',
-  },
-  analyzeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    marginBottom: 16,
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  analyzeButtonVerified: {
-    backgroundColor: '#34C759',
-    shadowColor: '#34C759',
-  },
-  analyzeButtonFailed: {
-    backgroundColor: '#FF3B30',
-    shadowColor: '#FF3B30',
-  },
-  analyzeButtonLoading: {
-    opacity: 0.7,
-  },
-  analyzeButtonText: {
-    color: '#fff',
-    fontSize: 16,
     fontWeight: '600',
   },
   inputContainer: {
