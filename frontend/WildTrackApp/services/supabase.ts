@@ -38,9 +38,9 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
 export async function signUp(email: string, password: string, username?: string, role: string = 'public') {
   try {
     // Use the same API base URL as api.ts
-    // Teammate's shared backend: http://169.233.183.248:8000/api/v1
+    // Shared backend IP (works for all teammates)
     const API_BASE_URL = __DEV__ 
-      ? 'http://localhost:8000/api/v1'  // Match api.ts - localhost for simulator
+      ? 'http://169.233.183.248:8000/api/v1'  // Match api.ts - shared backend
       : 'https://your-production-url.com/api/v1';
     
     console.log('📤 Signing up user:', { email, role, url: `${API_BASE_URL}/auth/signup` });
@@ -99,9 +99,9 @@ export async function signUp(email: string, password: string, username?: string,
 export async function signIn(email: string, password: string) {
   try {
     // Use the same API base URL as api.ts
-    // Teammate's shared backend: http://169.233.183.248:8000/api/v1
+    // Shared backend IP (works for all teammates)
     const API_BASE_URL = __DEV__ 
-      ? 'http://localhost:8000/api/v1'  // Match api.ts - localhost for simulator
+      ? 'http://169.233.183.248:8000/api/v1'  // Match api.ts - shared backend
       : 'https://your-production-url.com/api/v1';
     
     console.log('📤 Signing in user:', { email, url: `${API_BASE_URL}/auth/signin` });
