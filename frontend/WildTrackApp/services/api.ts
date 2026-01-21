@@ -13,8 +13,9 @@ import { getSessionToken } from './supabase';
 // For Expo Go on physical device, use your computer's IP address instead of localhost
 // NOTE: Update this IP address if your computer's IP changes!
 // To find your IP: Windows: ipconfig, Mac/Linux: ifconfig
+// Teammate's shared backend: http://169.233.183.248:8000/api/v1
 const API_BASE_URL = __DEV__ 
-  ? 'http://169.233.183.248:8000/api/v1'  // Your computer's IP for Expo Go on physical device
+  ? 'http://localhost:8000/api/v1'  // Use localhost for simulator, or your IP for physical device
   : 'https://your-production-url.com/api/v1';  // Production URL
 
 /**
