@@ -1,8 +1,9 @@
 """Ingestion API endpoint for receiving animal sightings."""
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request, Depends
-from slowapi import Limiter
+from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from app.models.observation import Observation, ObservationCreate
 from app.database import get_admin_supabase_client
 from app.auth import require_field_researcher
@@ -12,8 +13,12 @@ router = APIRouter()
 # Maximum observations per request (prevent memory exhaustion)
 MAX_OBSERVATIONS_PER_REQUEST = 1000
 
+# Initialize limiter for this router
+limiter = Limiter(key_func=get_remote_address)
+
 
 @router.post("/ingest", response_model=List[Observation], status_code=status.HTTP_201_CREATED)
+@limiter.limit("100/minute")
 async def ingest_observations(
     request: Request,
     observations: List[ObservationCreate],
@@ -25,12 +30,11 @@ async def ingest_observations(
     This endpoint receives raw GPS pings from the data collection system
     and stores them in the observations table.
     
-    Rate Limit: 100 requests per minute per IP address (configured via SlowAPIMiddleware)
+    Rate Limit: 100 requests per minute per IP address
     Max Observations: 1000 per request
     
     Uses service role key to bypass RLS policies (admin-only operation).
     """
-    # Rate limiting is automatically enforced by SlowAPIMiddleware configured in main.py
     # Validate list is not empty
     if not observations:
         raise HTTPException(
@@ -51,14 +55,22 @@ async def ingest_observations(
     records = []
     for idx, obs in enumerate(observations):
         try:
+            # Use timestamp from observation if provided, otherwise DB will use NOW()
+            # Ensure timestamp is timezone-aware (UTC)
+            timestamp_value = obs.timestamp.isoformat() if obs.timestamp else None
+            
             record = {
                 "animal_id": obs.animal_id.strip() if obs.animal_id else obs.animal_id,
                 "latitude": float(obs.latitude),
                 "longitude": float(obs.longitude),
-                "timestamp": obs.timestamp.isoformat(),
                 "species": obs.species.strip() if obs.species else obs.species,
                 "metadata": obs.metadata or {}
             }
+            
+            # Only include timestamp if provided (let DB use NOW() otherwise)
+            if timestamp_value:
+                record["timestamp"] = timestamp_value
+            
             records.append(record)
         except (ValueError, AttributeError) as e:
             raise HTTPException(

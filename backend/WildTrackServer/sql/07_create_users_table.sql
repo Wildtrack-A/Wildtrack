@@ -24,7 +24,7 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
 -- Allow service role to manage all profiles (for API operations)
 -- Note: User access is controlled via Auth0 JWT validation in the API layer
-CREATE POLICY "Service role can manage profiles"
+CREATE POLICY "profiles_service_role_manage"
     ON profiles FOR ALL
     USING (auth.role() = 'service_role');
 

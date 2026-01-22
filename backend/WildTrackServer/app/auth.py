@@ -2,12 +2,11 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import Client
-from app.database import get_admin_supabase_client
+from app.database import get_supabase_anon_client, get_admin_supabase_client
 from app.config import settings
 import logging
 from typing import Optional
 import jwt
-import base64
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,10 @@ async def get_current_user(
 ) -> dict:
     """
     Get current authenticated user from Supabase JWT token.
-    Validates token and returns user info.
+    Validates token using anon/public key and returns user info.
+    
+    CRITICAL: Uses anon client for JWT verification to respect trust boundaries.
+    Only uses admin client for profile access when RLS requires it.
     
     Args:
         credentials: HTTP Bearer token credentials
@@ -50,64 +52,44 @@ async def get_current_user(
         )
     
     try:
-        # Supabase uses HS256 with the JWT secret
-        # Get JWT secret from Supabase URL (it's the service key, but we can also use anon key for verification)
-        # For simplicity, we'll decode without verification first, then verify with Supabase client
-        # Actually, let's use Supabase's built-in verification
-        supabase = get_admin_supabase_client()
+        # Use anon client for JWT verification - this respects trust boundaries
+        # and doesn't bypass RLS for token validation
+        supabase_anon = get_supabase_anon_client()
         
-        # Verify token by trying to get user from it
-        # Decode token to get user ID (without verification first to get the user)
-        unverified_payload = jwt.decode(token, options={"verify_signature": False})
-        user_id = unverified_payload.get("sub")
-        
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing subject",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Verify token is valid by getting user from Supabase
+        # Verify token by trying to get user from it (uses anon key for verification)
         try:
-            user_response = supabase.auth.admin.get_user_by_id(user_id)
+            user_response = supabase_anon.auth.get_user(token)
             if not user_response.user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid token: user not found",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+            user_data = user_response.user
+            user_id = user_data.id
+            email = user_data.email or ""
         except Exception as e:
-            logger.warning(f"Failed to verify user {user_id}: {e}")
+            logger.warning(f"Failed to verify token with anon client: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: could not verify user",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Use the decoded payload
-        payload = unverified_payload
-        
-        user_id = payload.get("sub")
-        if not user_id:
-            logger.warning("Token missing subject (sub) claim")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing subject",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
         # Get user profile from Supabase
+        # Note: Profile access may require admin client if RLS is restrictive,
+        # but token verification above ensures the user is authenticated
         try:
-            # Get user from auth.users table (via admin client)
-            user_response = supabase.auth.admin.get_user_by_id(user_id)
-            user_data = user_response.user if hasattr(user_response, 'user') else None
-            
-            # Get profile data if it exists
-            profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
-            profile_data = profile_response.data[0] if profile_response.data else {}
-            
-            email = user_data.email if user_data else payload.get("email", "")
+            # Try with anon client first (respects RLS)
+            try:
+                profile_response = supabase_anon.table("profiles").select("*").eq("id", user_id).execute()
+                profile_data = profile_response.data[0] if profile_response.data else {}
+            except Exception:
+                # If RLS blocks, use admin client (but only for profile read, token already verified)
+                # This is acceptable since we've already verified the token above
+                admin_supabase = get_admin_supabase_client()
+                profile_response = admin_supabase.table("profiles").select("*").eq("id", user_id).execute()
+                profile_data = profile_response.data[0] if profile_response.data else {}
             
             return {
                 "id": user_id,
@@ -119,10 +101,10 @@ async def get_current_user(
             }
         except Exception as e:
             logger.warning(f"Failed to fetch user profile for {user_id}: {e}")
-            # Return basic user info from token if profile fetch fails
+            # Return basic user info from verified token if profile fetch fails
             return {
                 "id": user_id,
-                "email": payload.get("email", ""),
+                "email": email,
                 "username": "",
                 "full_name": None,
                 "role": "public",

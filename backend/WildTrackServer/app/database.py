@@ -8,6 +8,14 @@ def get_supabase_client() -> Client:
     return create_client(settings.supabase_url, settings.supabase_key)
 
 
+def get_supabase_anon_client() -> Client:
+    """
+    Get Supabase client with anon/public key.
+    Use this for JWT verification and operations that respect RLS policies.
+    """
+    return create_client(settings.supabase_url, settings.supabase_key)
+
+
 def get_admin_supabase_client() -> Client:
     """Get Supabase client with service key for admin operations."""
     if not settings.supabase_service_key:

@@ -6,19 +6,19 @@ ALTER TABLE observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE zones ENABLE ROW LEVEL SECURITY;
 
 -- Zones: Public can read (for safety), but only service role can write
-CREATE POLICY "Public can read zones for safety"
+CREATE POLICY "zones_public_read"
     ON zones
     FOR SELECT
     USING (true);
 
-CREATE POLICY "Service role can manage zones"
+CREATE POLICY "zones_service_role_manage"
     ON zones
     FOR ALL
     USING (auth.role() = 'service_role');
 
 -- Observations: Only service role can access (prevents poaching)
 -- Public cannot see exact animal locations
-CREATE POLICY "Service role can manage observations"
+CREATE POLICY "observations_service_role_manage"
     ON observations
     FOR ALL
     USING (auth.role() = 'service_role');
