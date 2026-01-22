@@ -52,11 +52,11 @@ export default function Analytics() {
         limit: 100,
         days: 30,
       });
-      console.log(`✅ Loaded ${sightings.length} Reddit sightings`);
+      console.log(`Loaded ${sightings.length} Reddit sightings`);
       setPosts(sightings);
       setFilteredPosts(sightings);
       if (sightings.length === 0) {
-        console.log('⚠️ No Reddit sightings found in database. Use "Scrape Reddit Data" button to fetch headlines.');
+        console.log('No Reddit sightings found in database. Use "Scrape Reddit Data" button to fetch headlines.');
       }
     } catch (error: any) {
       console.error('Error loading posts:', error);

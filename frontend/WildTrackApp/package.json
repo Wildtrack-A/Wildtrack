@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "start": "expo start",
-    "start:update-ip": "node update-api-url.js && expo start",
+    "start": "node update-api-url.js && expo start",
+    "start:no-update": "expo start",
     "update-ip": "node update-api-url.js",
     "android": "expo run:android",
     "ios": "expo run:ios",

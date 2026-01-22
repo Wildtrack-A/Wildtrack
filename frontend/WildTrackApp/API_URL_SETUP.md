@@ -4,17 +4,32 @@ This guide explains how to keep your app connected to the backend when moving be
 
 ## Quick Start
 
-### Option 1: Auto-Detection (Recommended)
-Run this before starting Expo to automatically detect and update your IP:
+### Automatic IP Detection (Default)
 
+**The IP address is now automatically detected and updated every time you start Expo!**
+
+Just run:
 ```bash
-npm run update-ip
 npm start
 ```
 
-Or use the combined command:
+The script will:
+- Automatically detect your current IP address
+- Update `app.json` if the IP has changed
+- Start Expo with the correct IP
+
+**No manual steps needed!**
+
+### Manual IP Update (Optional)
+
+If you want to update the IP without starting Expo:
 ```bash
-npm run start:update-ip
+npm run update-ip
+```
+
+To start Expo without updating IP (use current setting):
+```bash
+npm run start:no-update
 ```
 
 ### Option 2: Manual Update
@@ -47,10 +62,10 @@ For a solution that works across **any** network without updating IPs:
    ```
 
 ### Benefits of ngrok:
-- ✅ Works from anywhere (different WiFi, cellular data, etc.)
-- ✅ HTTPS (more secure)
-- ✅ No IP updates needed
-- ✅ Stable URL (unless you restart ngrok)
+- Works from anywhere (different WiFi, cellular data, etc.)
+- HTTPS (more secure)
+- No IP updates needed
+- Stable URL (unless you restart ngrok)
 
 ### Drawbacks:
 - Requires internet connection
@@ -60,7 +75,8 @@ For a solution that works across **any** network without updating IPs:
 ## Troubleshooting
 
 **"Network request timed out"**
-- Run `npm run update-ip` to update your IP
+- The IP should update automatically when you run `npm start`
+- If it doesn't, manually run `npm run update-ip` then restart Expo
 - Make sure backend is running on port 8000
 - Check that phone/device is on the same WiFi network
 

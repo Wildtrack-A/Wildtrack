@@ -105,9 +105,9 @@ export default function Home() {
       
       const convertedJournals = backendJournals.map(convertBackendToFrontend);
       setJournals(convertedJournals);
-      console.log('✅ Successfully loaded journals:', convertedJournals.length);
+      console.log('Successfully loaded journals:', convertedJournals.length);
     } catch (error: any) {
-      console.error('❌ Error loading journals:', error);
+      console.error('Error loading journals:', error);
       
       // Show user-friendly error message
       const errorMessage = error.message || 'Unknown error';
@@ -223,7 +223,7 @@ export default function Home() {
           setPhotoUri(null);
           setSpecies('');
           Alert.alert(
-            'No Animal Detected ❌',
+            'No Animal Detected',
             'The image does not contain an animal. Please take a photo of an animal to create a log entry.',
             [
               { 
@@ -283,7 +283,7 @@ export default function Home() {
           setPhotoUri(null);
           setSpecies('');
           Alert.alert(
-            'Detection Unclear ⚠️',
+            'Detection Unclear',
             'Could not clearly identify an animal in this image. Please take a clearer photo of an animal.',
             [{ text: 'OK' }]
           );
@@ -375,7 +375,7 @@ export default function Home() {
     
     if (invalidSpecies.some(invalid => species.toLowerCase().includes(invalid.toLowerCase()))) {
       Alert.alert(
-        'Invalid Species ❌',
+        'Invalid Species',
         'The detected species is not valid. Please enter a valid animal species name or take a new photo.',
         [{ 
           text: 'OK',

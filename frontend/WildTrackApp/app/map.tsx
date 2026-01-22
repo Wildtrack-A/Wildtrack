@@ -193,10 +193,10 @@ function MapScreen() {
         });
       });
       
-      console.log(`✅ Loaded ${allPoints.length} GPS points from ${response.clusters.length} clusters`);
+      console.log(`Loaded ${allPoints.length} GPS points from ${response.clusters.length} clusters`);
       
       if (allPoints.length === 0) {
-        console.warn('⚠️ No GPS points found in clusters.');
+        console.warn('No GPS points found in clusters.');
         setZoneData([]);
         setShowZoneWarningPopup(true);
         setClustersLoaded(true); // Mark as loaded even if empty
@@ -207,7 +207,7 @@ function MapScreen() {
         setClustersLoaded(true); // Mark clusters as loaded
       }
     } catch (error: any) {
-      console.error('❌ Error loading clusters:', error);
+      console.error('Error loading clusters:', error);
       setWorldDataError(error.message || 'Failed to load clusters. Make sure the backend is running.');
       setClustersLoaded(true); // Mark as attempted even on error
     } finally {
@@ -382,12 +382,12 @@ function MapScreen() {
 
     // Only create clusters if we have points
     if (points.length === 0) {
-      console.log('⚠️ No points available for clustering');
+      console.log('No points available for clustering');
       return [];
     }
 
     const result = clusterPoints(points, 0.01); // 0.01 degree ≈ 1km
-    console.log(`✅ Created ${result.length} clusters from ${points.length} points`);
+    console.log(`Created ${result.length} clusters from ${points.length} points`);
     return result;
   }, [zoneData, dataView, selectedSpecies]);
 
@@ -648,7 +648,7 @@ function MapScreen() {
                   }}
                   anchor={{ x: 0.5, y: 0.5 }}
                   onPress={() => {
-                    console.log('📍 Cluster clicked:', cluster);
+                    console.log('Cluster clicked:', cluster);
                     setSelectedCluster(cluster);
                     setSelectedMarker(null); // Clear any selected marker
                   }}
@@ -935,7 +935,7 @@ function MapScreen() {
                         <View style={styles.logItemMeta}>
                           {log.latitude && log.longitude && (
                             <Text style={styles.logItemMetaText}>
-                              📍 {log.latitude.toFixed(4)}, {log.longitude.toFixed(4)}
+                              {log.latitude.toFixed(4)}, {log.longitude.toFixed(4)}
                             </Text>
                           )}
                           <Text style={styles.logItemMetaText}>
@@ -1159,7 +1159,7 @@ function MapScreen() {
                             
                             {point.latitude && point.longitude && (
                               <Text style={styles.multiSightingDetail}>
-                                📍 {point.latitude.toFixed(4)}, {point.longitude.toFixed(4)}
+                                {point.latitude.toFixed(4)}, {point.longitude.toFixed(4)}
                               </Text>
                             )}
                             

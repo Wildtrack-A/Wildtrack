@@ -61,6 +61,15 @@ function getLocalIP() {
   }
 }
 
+function getCurrentApiUrl() {
+  try {
+    const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+    return appJson.expo?.extra?.apiBaseUrl || null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function updateAppJson(ipAddress, port = 8000) {
   try {
     const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
@@ -70,15 +79,25 @@ function updateAppJson(ipAddress, port = 8000) {
     }
     
     const apiBaseUrl = `http://${ipAddress}:${port}/api/v1`;
+    const currentUrl = appJson.expo.extra.apiBaseUrl;
+    
+    // Only update if IP has changed
+    if (currentUrl === apiBaseUrl) {
+      return { updated: false, url: apiBaseUrl };
+    }
+    
     appJson.expo.extra.apiBaseUrl = apiBaseUrl;
     
     fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2) + '\n');
     
-    console.log(`✅ Updated API URL in app.json to: ${apiBaseUrl}`);
-    return true;
+    console.log(`Updated API URL in app.json to: ${apiBaseUrl}`);
+    if (currentUrl) {
+      console.log(`   Previous: ${currentUrl}`);
+    }
+    return { updated: true, url: apiBaseUrl };
   } catch (error) {
-    console.error('❌ Error updating app.json:', error.message);
-    return false;
+    console.error('Error updating app.json:', error.message);
+    return { updated: false, url: null };
   }
 }
 
@@ -86,15 +105,21 @@ function updateAppJson(ipAddress, port = 8000) {
 const ipAddress = getLocalIP();
 
 if (!ipAddress) {
-  console.error('❌ Could not detect your IP address. Please set it manually in app.json under expo.extra.apiBaseUrl');
+  console.error('Could not detect your IP address. Please set it manually in app.json under expo.extra.apiBaseUrl');
   process.exit(1);
 }
 
-console.log(`📍 Detected IP address: ${ipAddress}`);
+console.log(`Detected IP address: ${ipAddress}`);
 
-if (updateAppJson(ipAddress)) {
-  console.log('💡 Tip: You may need to restart Expo for changes to take effect');
-  console.log('💡 Run: npm start (or npx expo start)');
+const result = updateAppJson(ipAddress);
+if (result.url) {
+  if (result.updated) {
+    console.log('IP address changed! Restart Expo to use the new IP.');
+  } else {
+    console.log(`IP address unchanged (${ipAddress})`);
+  }
+  // Exit with success code (0) so npm scripts can continue
+  process.exit(0);
 } else {
   process.exit(1);
 }

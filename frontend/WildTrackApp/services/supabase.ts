@@ -26,10 +26,10 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
       },
     });
   } catch (error) {
-    console.warn('⚠️ Failed to create Supabase client:', error);
+    console.warn('Failed to create Supabase client:', error);
   }
 } else {
-  console.log('ℹ️ Supabase client not initialized (using backend API for auth). This is fine if you only use the backend API.');
+  console.log('Supabase client not initialized (using backend API for auth). This is fine if you only use the backend API.');
 }
 
 /**
@@ -42,7 +42,7 @@ export async function signUp(email: string, password: string, username?: string,
       ? (Constants.expoConfig?.extra?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1')
       : (process.env.EXPO_PUBLIC_API_BASE_URL || 'https://your-production-url.com/api/v1');
     
-    console.log('📤 Signing up user:', { email, role, url: `${API_BASE_URL}/auth/signup` });
+    console.log('Signing up user:', { email, role, url: `${API_BASE_URL}/auth/signup` });
     
     const response = await fetch(`${API_BASE_URL}/auth/signup`, {
       method: 'POST',
@@ -57,33 +57,33 @@ export async function signUp(email: string, password: string, username?: string,
       }),
     });
 
-    console.log('📥 Signup response status:', response.status, response.statusText);
+    console.log('Signup response status:', response.status, response.statusText);
 
     if (!response.ok) {
       let errorMessage = 'Failed to sign up';
       try {
         const errorData = await response.json();
         errorMessage = errorData.detail || errorData.message || JSON.stringify(errorData);
-        console.error('❌ Signup error response:', errorData);
+        console.error('Signup error response:', errorData);
       } catch (e) {
         // If JSON parsing fails, try to get text
         try {
           const text = await response.text();
           errorMessage = text || `HTTP ${response.status}: ${response.statusText}`;
-          console.error('❌ Signup error (text):', errorMessage);
+          console.error('Signup error (text):', errorMessage);
         } catch (e2) {
           errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          console.error('❌ Signup error (status only):', errorMessage);
+          console.error('Signup error (status only):', errorMessage);
         }
       }
       throw new Error(errorMessage);
     }
 
     const data = await response.json();
-    console.log('✅ Signup successful:', data);
+    console.log('Signup successful:', data);
     return data;
   } catch (error: any) {
-    console.error('❌ Sign up error:', error);
+    console.error('Sign up error:', error);
     // Re-throw with better error message
     if (error.message) {
       throw error;
@@ -102,7 +102,7 @@ export async function signIn(email: string, password: string) {
       ? (Constants.expoConfig?.extra?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1')
       : (process.env.EXPO_PUBLIC_API_BASE_URL || 'https://your-production-url.com/api/v1');
     
-    console.log('📤 Signing in user:', { email, url: `${API_BASE_URL}/auth/signin` });
+    console.log('Signing in user:', { email, url: `${API_BASE_URL}/auth/signin` });
     
     const response = await fetch(`${API_BASE_URL}/auth/signin`, {
       method: 'POST',
@@ -115,29 +115,29 @@ export async function signIn(email: string, password: string) {
       }),
     });
 
-    console.log('📥 Signin response status:', response.status, response.statusText);
+    console.log('Signin response status:', response.status, response.statusText);
 
     if (!response.ok) {
       let errorMessage = 'Invalid email or password';
       try {
         const errorData = await response.json();
         errorMessage = errorData.detail || errorData.message || JSON.stringify(errorData);
-        console.error('❌ Signin error response:', errorData);
+        console.error('Signin error response:', errorData);
       } catch (e) {
         try {
           const text = await response.text();
           errorMessage = text || `HTTP ${response.status}: ${response.statusText}`;
-          console.error('❌ Signin error (text):', errorMessage);
+          console.error('Signin error (text):', errorMessage);
         } catch (e2) {
           errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          console.error('❌ Signin error (status only):', errorMessage);
+          console.error('Signin error (status only):', errorMessage);
         }
       }
       throw new Error(errorMessage);
     }
 
     const data = await response.json();
-    console.log('✅ Signin successful');
+    console.log('Signin successful');
     
     // Store tokens
     if (data.access_token) {
@@ -149,7 +149,7 @@ export async function signIn(email: string, password: string) {
     
     return data;
   } catch (error: any) {
-    console.error('❌ Sign in error:', error);
+    console.error('Sign in error:', error);
     if (error.message) {
       throw error;
     }
