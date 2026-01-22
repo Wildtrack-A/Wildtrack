@@ -8,14 +8,15 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { getSessionToken } from './supabase';
 
-// For Expo Go on physical device, use your computer's IP address instead of localhost
-// NOTE: Update this IP address if your computer's IP changes!
-// To find your IP: Windows: ipconfig, Mac/Linux: ifconfig
+// Get API base URL from Expo Constants (app.json extra section)
+// This can be updated via the update-api-url.js script or manually in app.json
+// For production, set EXPO_PUBLIC_API_BASE_URL environment variable
 const API_BASE_URL = __DEV__ 
-  ? 'http://100.64.56.244:8000/api/v1'  // Your computer's IP for Expo Go on physical device
-  : 'https://your-production-url.com/api/v1';  // Production URL
+  ? (Constants.expoConfig?.extra?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1')
+  : (process.env.EXPO_PUBLIC_API_BASE_URL || 'https://your-production-url.com/api/v1');
 
 /**
  * Get headers for API requests with authentication token

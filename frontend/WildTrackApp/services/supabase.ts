@@ -39,8 +39,8 @@ export async function signUp(email: string, password: string, username?: string,
   try {
     // Use the same API base URL as api.ts
     const API_BASE_URL = __DEV__ 
-      ? 'http://100.64.56.244:8000/api/v1'  // Match api.ts
-      : 'https://your-production-url.com/api/v1';
+      ? (Constants.expoConfig?.extra?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1')
+      : (process.env.EXPO_PUBLIC_API_BASE_URL || 'https://your-production-url.com/api/v1');
     
     console.log('📤 Signing up user:', { email, role, url: `${API_BASE_URL}/auth/signup` });
     
@@ -99,8 +99,8 @@ export async function signIn(email: string, password: string) {
   try {
     // Use the same API base URL as api.ts
     const API_BASE_URL = __DEV__ 
-      ? 'http://100.64.56.244:8000/api/v1'  // Match api.ts
-      : 'https://your-production-url.com/api/v1';
+      ? (Constants.expoConfig?.extra?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1')
+      : (process.env.EXPO_PUBLIC_API_BASE_URL || 'https://your-production-url.com/api/v1');
     
     console.log('📤 Signing in user:', { email, url: `${API_BASE_URL}/auth/signin` });
     
